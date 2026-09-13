@@ -138,23 +138,28 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                     onSelect = viewModel::setFlightMode,
                 )
 
+                FlightHud(
+                    vehicle = vehicle,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(200.dp),
+                )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(148.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Color.Black),
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        AttitudeIndicator(rollDeg = vehicle.rollDeg, pitchDeg = vehicle.pitchDeg)
-                    }
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         TelemetryLine("MODE", vehicle.mode)
-                        TelemetryLine("ARM", if (vehicle.armed) "ARMED" else "DISARMED", if (vehicle.armed) Color(0xFFFF6B6B) else scheme.primary)
                         TelemetryLine("FIX", "${vehicle.gpsFix}  ${vehicle.satellites}sats")
+                    }
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        TelemetryLine("ARM", if (vehicle.armed) "ARMED" else "DISARMED", if (vehicle.armed) Color(0xFFFF6B6B) else scheme.primary)
                         TelemetryLine("HDG", vehicle.headingDeg?.let { "${it.toInt()}°" } ?: "—")
                     }
                 }
