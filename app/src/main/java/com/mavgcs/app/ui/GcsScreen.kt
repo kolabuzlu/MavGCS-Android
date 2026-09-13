@@ -46,6 +46,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -69,9 +70,11 @@ import com.mavgcs.app.mavlink.LinkType
 import com.mavgcs.app.mavlink.PlaneModeButton
 import com.mavgcs.app.mavlink.VehicleState
 import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
+import org.osmdroid.events.MapEventsReceiver
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.util.MapTileIndex
 import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.MapEventsOverlay
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polyline
 
@@ -80,6 +83,8 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
     val vehicle by viewModel.vehicle.collectAsStateWithLifecycle()
     val form by viewModel.form.collectAsStateWithLifecycle()
     val scheme = MaterialTheme.colorScheme
+    var flyTarget by remember { mutableStateOf<GeoPoint?>(null) }
+    var showFlyDialog by remember { mutableStateOf(false) }
 
     Surface(modifier = Modifier.fillMaxSize(), color = scheme.background) {
         Row(
@@ -150,7 +155,20 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                         .clip(RoundedCornerShape(16.dp))
                         .border(1.dp, scheme.outline, RoundedCornerShape(16.dp)),
                 ) {
-                    VehicleMap(vehicle)
+                    VehicleMap(
+                        vehicle = vehicle,
+                        flyTarget = flyTarget,
+                        onMapTap = { flyTarget = it },
+                    )
+                    flyTarget?.let { target ->
+                        FlyHereBar(
+                            target = target,
+                            enabled = vehicle.linkUp,
+                            onFly = { showFlyDialog = true },
+                            onClear = { flyTarget = null },
+                            modifier = Modifier.align(Alignment.BottomCenter),
+                        )
+                    }
                     Text(
                         text = "Esri, Maxar, Earthstar Geographics",
                         fontSize = 9.sp,
@@ -164,6 +182,112 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
             }
         }
     }
+
+    val target = flyTarget
+    if (showFlyDialog && target != null) {
+        FlyHereDialog(
+            target = target,
+            currentAltitude = vehicle.altRelM,
+            onDismiss = { showFlyDialog = false },
+            onConfirm = { altitude ->
+                showFlyDialog = false
+                viewModel.flyTo(target.latitude, target.longitude, altitude)
+            },
+        )
+    }
+}
+
+@Composable
+private fun FlyHereBar(
+    target: GeoPoint,
+    enabled: Boolean,
+    onFly: () -> Unit,
+    onClear: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val scheme = MaterialTheme.colorScheme
+    Row(
+        modifier = modifier
+            .padding(bottom = 26.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(scheme.surface.copy(alpha = 0.92f))
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "%.6f, %.6f".format(target.latitude, target.longitude),
+            fontSize = 12.sp,
+            fontFamily = FontFamily.Monospace,
+            color = scheme.onSurface,
+        )
+        Button(
+            onClick = onFly,
+            enabled = enabled,
+            modifier = Modifier.height(38.dp),
+            shape = RoundedCornerShape(6.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = scheme.secondary,
+                contentColor = scheme.onSecondary,
+            ),
+        ) {
+            Text("FLY HERE", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+        }
+        TextButton(onClick = onClear) {
+            Text("Clear", fontSize = 12.sp)
+        }
+    }
+}
+
+@Composable
+private fun FlyHereDialog(
+    target: GeoPoint,
+    currentAltitude: Float?,
+    onDismiss: () -> Unit,
+    onConfirm: (Float) -> Unit,
+) {
+    var text by remember {
+        mutableStateOf(currentAltitude?.takeIf { it > 1f }?.let { "%.0f".format(it) } ?: "100")
+    }
+    val altitude = text.toFloatOrNull()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Fly to here") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = "%.6f, %.6f".format(target.latitude, target.longitude),
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 13.sp,
+                )
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { entered ->
+                        text = entered.filter { it.isDigit() || it == '.' }.take(6)
+                    },
+                    label = { Text("Altitude above home (m)") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                )
+                Text(
+                    text = "Switches the vehicle to GUIDED and flies to this point.",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { altitude?.let(onConfirm) },
+                enabled = altitude != null && altitude > 0f,
+            ) {
+                Text("Fly")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }
 
 private const val NO_DATA = "--"
@@ -626,10 +750,17 @@ private val EsriWorldImagery = object : OnlineTileSourceBase(
 }
 
 @Composable
-private fun VehicleMap(vehicle: VehicleState) {
+private fun VehicleMap(
+    vehicle: VehicleState,
+    flyTarget: GeoPoint?,
+    onMapTap: (GeoPoint) -> Unit,
+) {
     val trail = remember { mutableListOf<GeoPoint>() }
     val context = LocalContext.current
     val planeIcon = remember(context) { planeMarkerIcon(context) }
+    // The overlay is built once in factory, so it captures whatever handler was
+    // current at that moment; this keeps it pointing at the latest one.
+    val currentTap by rememberUpdatedState(onMapTap)
     AndroidView(
         modifier = Modifier.fillMaxSize(),
         factory = { context ->
@@ -638,10 +769,25 @@ private fun VehicleMap(vehicle: VehicleState) {
                 setMultiTouchControls(true)
                 controller.setZoom(18.0)
                 controller.setCenter(GeoPoint(37.3349, -122.0090))
+                overlays.add(
+                    MapEventsOverlay(
+                        object : MapEventsReceiver {
+                            override fun singleTapConfirmedHelper(p: GeoPoint): Boolean {
+                                currentTap(p)
+                                return true
+                            }
+
+                            override fun longPressHelper(p: GeoPoint): Boolean = false
+                        },
+                    ),
+                )
                 onResume()
             }
         },
         update = { map ->
+            // Rebuilt every update, so it has to happen whether or not there is a
+            // fix, otherwise the target marker would never refresh without one.
+            map.overlays.removeAll { it !is MapEventsOverlay }
             val lat = vehicle.lat
             val lon = vehicle.lon
             if (lat != null && lon != null && lat != 0.0 && lon != 0.0) {
@@ -651,7 +797,6 @@ private fun VehicleMap(vehicle: VehicleState) {
                     trail += point
                     if (trail.size > 400) trail.removeAt(0)
                 }
-                map.overlays.removeAll { true }
                 if (trail.size > 1) {
                     map.overlays += Polyline().apply {
                         setPoints(trail.toList())
@@ -673,6 +818,13 @@ private fun VehicleMap(vehicle: VehicleState) {
                 if (firstFix) {
                     map.controller.setZoom(18.0)
                     map.controller.setCenter(point)
+                }
+            }
+            if (flyTarget != null) {
+                map.overlays += Marker(map).apply {
+                    position = flyTarget
+                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                    title = "Fly to"
                 }
             }
             map.invalidate()

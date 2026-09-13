@@ -6,6 +6,7 @@ import io.dronefleet.mavlink.ardupilotmega.Rangefinder
 import io.dronefleet.mavlink.ardupilotmega.Wind
 import io.dronefleet.mavlink.common.Attitude
 import io.dronefleet.mavlink.common.BatteryStatus
+import io.dronefleet.mavlink.common.CommandInt
 import io.dronefleet.mavlink.common.CommandLong
 import io.dronefleet.mavlink.common.GlobalPositionInt
 import io.dronefleet.mavlink.common.GpsRawInt
@@ -13,6 +14,7 @@ import io.dronefleet.mavlink.common.HomePosition
 import io.dronefleet.mavlink.common.NavControllerOutput
 import io.dronefleet.mavlink.common.ParamSet
 import io.dronefleet.mavlink.common.MavCmd
+import io.dronefleet.mavlink.common.MavFrame
 import io.dronefleet.mavlink.common.MavParamType
 import io.dronefleet.mavlink.common.RequestDataStream
 import io.dronefleet.mavlink.common.ScaledPressure
@@ -45,6 +47,7 @@ import kotlin.math.asin
 import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.pow
+import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -194,6 +197,31 @@ class MavlinkClient {
         connection.send2(GCS_SYSTEM_ID, GCS_COMPONENT_ID, request)
     }
 
+    /**
+     * Guided goto. Sent as COMMAND_INT rather than COMMAND_LONG: that message
+     * carries its parameters as float32, which cannot hold a 1e7-scaled
+     * latitude without losing metres of precision. COMMAND_INT has int32 x/y.
+     */
+    fun flyTo(lat: Double, lon: Double, altitudeM: Float) =
+        guided("fly to %.6f, %.6f at %.0f m".format(lat, lon, altitudeM)) { connection, sys, comp ->
+            val payload = CommandInt.builder()
+                .targetSystem(sys)
+                .targetComponent(comp)
+                .frame(MavFrame.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT)
+                .command(MavCmd.MAV_CMD_DO_REPOSITION)
+                .current(0)
+                .autocontinue(0)
+                .param1(-1f)
+                .param2(REPOSITION_CHANGE_MODE.toFloat())
+                .param3(0f)
+                .param4(Float.NaN)
+                .x((lat * 1e7).roundToInt())
+                .y((lon * 1e7).roundToInt())
+                .z(altitudeM)
+                .build()
+            connection.send2(GCS_SYSTEM_ID, GCS_COMPONENT_ID, payload)
+        }
+
     private fun guided(description: String, block: (MavlinkConnection, Int, Int) -> Unit) {
         val connection = connectionRef.get() ?: return
         val (sys, comp) = target.get() ?: (1 to 1)
@@ -299,7 +327,10 @@ class MavlinkClient {
                 it.copy(
                     rollDeg = Math.toDegrees(payload.roll().toDouble()).toFloat(),
                     pitchDeg = Math.toDegrees(payload.pitch().toDouble()).toFloat(),
-                    yawDeg = Math.toDegrees(payload.yaw().toDouble()).toFloat(),
+                    // Yaw arrives as radians in -pi..pi, so it converts to
+                    // -180..180. Wrapped to a compass bearing like the heading
+                    // and wind fields; roll and pitch stay signed, as they should.
+                    yawDeg = normaliseBearing(Math.toDegrees(payload.yaw().toDouble()).toFloat()),
                 )
             }
             is GlobalPositionInt -> _state.update {
@@ -366,7 +397,7 @@ class MavlinkClient {
                     // ArduPilot wraps this to -180..180, so a westerly reads as
                     // -13 rather than 347. Normalised here so the stored bearing
                     // is a compass value, as headingDeg already is.
-                    windDirectionDeg = ((payload.direction() % 360f) + 360f) % 360f,
+                    windDirectionDeg = normaliseBearing(payload.direction()),
                     windSpeedMs = payload.speed(),
                 )
             }
@@ -547,8 +578,12 @@ class MavlinkClient {
         private const val MAV_FRAME_GLOBAL_RELATIVE_ALT = 3
         private const val SPEED_TYPE_AIRSPEED = 0
         private const val LOITER_RADIUS_PARAM = "WP_LOITER_RAD"
+        private const val REPOSITION_CHANGE_MODE = 1
     }
 }
+
+/** Wraps a bearing into 0..360, the convention the rest of the state uses. */
+private fun normaliseBearing(degrees: Float): Float = ((degrees % 360f) + 360f) % 360f
 
 /** Great-circle distance in metres, or null unless both points are known. */
 private fun distanceMeters(lat1: Double?, lon1: Double?, lat2: Double?, lon2: Double?): Float? {

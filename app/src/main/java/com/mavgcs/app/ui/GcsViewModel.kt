@@ -74,6 +74,10 @@ class GcsViewModel : ViewModel() {
         }
     }
 
+    fun flyTo(lat: Double, lon: Double, altitudeM: Float) {
+        client.flyTo(lat, lon, altitudeM)
+    }
+
     fun command(command: GcsCommand) {
         client.send(command)
     }
