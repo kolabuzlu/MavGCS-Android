@@ -240,18 +240,29 @@ private fun ArmPad(enabled: Boolean, onCommand: (GcsCommand) -> Unit) {
     val scheme = MaterialTheme.colorScheme
     Text("COMMANDS", fontWeight = FontWeight.Bold, color = scheme.primary)
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        listOf(GcsCommand.ARM to "ARM", GcsCommand.DISARM to "DISARM").forEach { (command, label) ->
-            Button(
-                onClick = { onCommand(command) },
-                enabled = enabled,
-                modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = scheme.error,
-                    contentColor = Color.White,
-                ),
-            ) {
-                Text(label, fontSize = 13.sp)
-            }
+        Button(
+            onClick = { onCommand(GcsCommand.ARM) },
+            enabled = enabled,
+            modifier = Modifier.weight(1f),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = scheme.primary,
+                contentColor = scheme.onPrimary,
+            ),
+        ) {
+            Text("ARM", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        }
+        // Monochrome, so the armed-state colour never reads as a second live action.
+        Button(
+            onClick = { onCommand(GcsCommand.DISARM) },
+            enabled = enabled,
+            modifier = Modifier.weight(1f),
+            border = BorderStroke(1.dp, scheme.outline),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = scheme.surfaceVariant,
+                contentColor = scheme.onSurface,
+            ),
+        ) {
+            Text("DISARM", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }

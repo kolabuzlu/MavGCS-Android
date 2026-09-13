@@ -5,4 +5,15 @@
         <item name="android:windowBackground">@color/gcs_bg</item>
         <item name="android:windowFullscreen">false</item>
     </style>
+
+    <!--
+      Shown by the system between tapping the icon and the first frame. Black so
+      it matches the MavGCS logo splash that follows, instead of flashing the
+      launcher icon on a pale circle.
+    -->
+    <style name="Theme.MavGCS.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splash_bg</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher</item>
+        <item name="postSplashScreenTheme">@style/Theme.MavGCS</item>
+    </style>
 </resources>
