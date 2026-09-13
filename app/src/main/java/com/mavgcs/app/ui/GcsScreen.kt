@@ -1,6 +1,11 @@
 package com.mavgcs.app.ui
 
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Paint
+import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.Drawable
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -42,6 +47,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -49,6 +55,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.mavgcs.app.R
 import com.mavgcs.app.mavlink.FlightModes
 import com.mavgcs.app.mavlink.GcsCommand
 import com.mavgcs.app.mavlink.LinkType
@@ -450,6 +457,25 @@ private fun VtolModeButton(
     }
 }
 
+private const val PLANE_ICON_DP = 48
+
+/**
+ * planeicon.png is 722x605, far too large to use as a marker directly. It
+ * lives in drawable-nodpi so decodeResource returns those exact pixels rather
+ * than density-scaling them, and is scaled once here to a fixed marker size.
+ * The nose points north, which is what Marker.rotation expects at 0 degrees.
+ */
+private fun planeMarkerIcon(context: Context): Drawable {
+    val source = BitmapFactory.decodeResource(context.resources, R.drawable.planeicon)
+    val widthPx = (PLANE_ICON_DP * context.resources.displayMetrics.density).toInt()
+    val heightPx = (widthPx.toLong() * source.height / source.width).toInt()
+    val scaled = Bitmap.createScaledBitmap(source, widthPx, heightPx, true)
+    if (scaled !== source) {
+        source.recycle()
+    }
+    return BitmapDrawable(context.resources, scaled)
+}
+
 /**
  * ESRI World Imagery. The tile path is {z}/{y}/{x} -- ArcGIS orders it
  * level/row/column, not the {z}/{x}/{y} that osmdroid's XYTileSource emits.
@@ -473,6 +499,8 @@ private val EsriWorldImagery = object : OnlineTileSourceBase(
 @Composable
 private fun VehicleMap(vehicle: VehicleState) {
     val trail = remember { mutableListOf<GeoPoint>() }
+    val context = LocalContext.current
+    val planeIcon = remember(context) { planeMarkerIcon(context) }
     AndroidView(
         modifier = Modifier.fillMaxSize(),
         factory = { context ->
@@ -505,6 +533,7 @@ private fun VehicleMap(vehicle: VehicleState) {
                 }
                 map.overlays += Marker(map).apply {
                     position = point
+                    icon = planeIcon
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                     title = vehicle.mode
                     rotation = vehicle.headingDeg ?: vehicle.yawDeg
