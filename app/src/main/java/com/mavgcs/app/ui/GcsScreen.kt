@@ -89,8 +89,7 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                     .fillMaxHeight()
                     .clip(RoundedCornerShape(16.dp))
                     .background(scheme.surface)
-                    .padding(14.dp)
-                    .verticalScroll(rememberScrollState()),
+                    .padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 ArmPad(enabled = vehicle.linkUp, onCommand = viewModel::command)
@@ -106,25 +105,6 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                         .fillMaxWidth()
                         .height(200.dp),
                 )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        TelemetryLine("MODE", vehicle.mode)
-                        TelemetryLine("FIX", "${vehicle.gpsFix}  ${vehicle.satellites}sats")
-                    }
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        TelemetryLine("ARM", if (vehicle.armed) "ARMED" else "DISARMED", if (vehicle.armed) Color(0xFFFF6B6B) else scheme.primary)
-                        TelemetryLine("HDG", vehicle.headingDeg?.let { "${it.toInt()}°" } ?: "—")
-                    }
-                }
                 TelemetryGrid(vehicle)
             }
             Column(
@@ -212,14 +192,6 @@ private fun StatusPill(text: String, color: Color) {
             .background(color.copy(alpha = 0.15f))
             .padding(horizontal = 12.dp, vertical = 4.dp),
     )
-}
-
-@Composable
-private fun TelemetryLine(label: String, value: String, color: Color = MaterialTheme.colorScheme.onBackground) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.width(44.dp))
-        Text(value, color = color, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-    }
 }
 
 private const val NO_DATA = "--"
