@@ -42,7 +42,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mavgcs.app.mavlink.GcsCommand
 import com.mavgcs.app.mavlink.LinkType
 import com.mavgcs.app.mavlink.VehicleState
+import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
 import org.osmdroid.util.GeoPoint
+import org.osmdroid.util.MapTileIndex
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polyline
@@ -60,23 +62,6 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                 .padding(12.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Column(
-                modifier = Modifier
-                    .weight(1.35f)
-                    .fillMaxHeight(),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                StatusBar(vehicle)
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
-                        .border(1.dp, scheme.outline, RoundedCornerShape(16.dp)),
-                ) {
-                    VehicleMap(vehicle)
-                }
-            }
             Column(
                 modifier = Modifier
                     .width(420.dp)
@@ -167,6 +152,32 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                             Text(line, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
                         }
                     }
+                }
+            }
+            Column(
+                modifier = Modifier
+                    .weight(1.35f)
+                    .fillMaxHeight(),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                StatusBar(vehicle)
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .border(1.dp, scheme.outline, RoundedCornerShape(16.dp)),
+                ) {
+                    VehicleMap(vehicle)
+                    Text(
+                        text = "Esri, Maxar, Earthstar Geographics",
+                        fontSize = 9.sp,
+                        color = Color.White.copy(alpha = 0.8f),
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .background(Color.Black.copy(alpha = 0.45f))
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
                 }
             }
         }
@@ -289,6 +300,26 @@ private fun CommandPad(enabled: Boolean, onCommand: (GcsCommand) -> Unit) {
     }
 }
 
+/**
+ * ESRI World Imagery. The tile path is {z}/{y}/{x} -- ArcGIS orders it
+ * level/row/column, not the {z}/{x}/{y} that osmdroid's XYTileSource emits.
+ */
+private val EsriWorldImagery = object : OnlineTileSourceBase(
+    "ESRI World Imagery",
+    0,
+    19,
+    256,
+    "",
+    arrayOf("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/"),
+    "Esri, Maxar, Earthstar Geographics, and the GIS User Community",
+) {
+    override fun getTileURLString(pMapTileIndex: Long): String =
+        baseUrl +
+            MapTileIndex.getZoom(pMapTileIndex) + "/" +
+            MapTileIndex.getY(pMapTileIndex) + "/" +
+            MapTileIndex.getX(pMapTileIndex)
+}
+
 @Composable
 private fun VehicleMap(vehicle: VehicleState) {
     val trail = remember { mutableListOf<GeoPoint>() }
@@ -296,6 +327,7 @@ private fun VehicleMap(vehicle: VehicleState) {
         modifier = Modifier.fillMaxSize(),
         factory = { context ->
             MapView(context).apply {
+                setTileSource(EsriWorldImagery)
                 setMultiTouchControls(true)
                 controller.setZoom(18.0)
                 controller.setCenter(GeoPoint(37.3349, -122.0090))
