@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -29,6 +30,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
@@ -37,6 +39,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -51,6 +54,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -60,6 +64,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mavgcs.app.R
 import com.mavgcs.app.mavlink.FlightModes
 import com.mavgcs.app.mavlink.GcsCommand
+import com.mavgcs.app.mavlink.GuidedAction
 import com.mavgcs.app.mavlink.LinkType
 import com.mavgcs.app.mavlink.PlaneModeButton
 import com.mavgcs.app.mavlink.VehicleState
@@ -99,11 +104,15 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                     onSelect = viewModel::setFlightMode,
                 )
 
+                GuidedControlPanel(
+                    enabled = vehicle.linkUp,
+                    onSend = viewModel::sendGuided,
+                )
                 FlightHud(
                     vehicle = vehicle,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(200.dp),
+                        .height(158.dp),
                 )
                 TelemetryGrid(vehicle)
             }
@@ -113,7 +122,6 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                     .fillMaxHeight(),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                StatusBar(vehicle)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -156,42 +164,6 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
             }
         }
     }
-}
-
-@Composable
-private fun StatusBar(vehicle: VehicleState) {
-    val scheme = MaterialTheme.colorScheme
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(scheme.surface)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text("MavGCS", fontWeight = FontWeight.Bold, fontSize = 22.sp, color = scheme.primary)
-        Row(horizontalArrangement = Arrangement.spacedBy(18.dp), verticalAlignment = Alignment.CenterVertically) {
-            StatusPill(if (vehicle.linkUp) "LINK UP" else "NO HEARTBEAT", if (vehicle.linkUp) scheme.primary else scheme.error)
-            Text("SYS ${vehicle.systemId}", color = scheme.onSurfaceVariant)
-            Text(vehicle.vehicleType, color = scheme.onSurfaceVariant)
-            Text(vehicle.autopilot, color = scheme.onSurfaceVariant)
-            Text("${vehicle.packetsIn} pkt", color = scheme.onSurfaceVariant)
-        }
-    }
-}
-
-@Composable
-private fun StatusPill(text: String, color: Color) {
-    Text(
-        text = text,
-        color = color,
-        fontWeight = FontWeight.Bold,
-        modifier = Modifier
-            .clip(RoundedCornerShape(50))
-            .background(color.copy(alpha = 0.15f))
-            .padding(horizontal = 12.dp, vertical = 4.dp),
-    )
 }
 
 private const val NO_DATA = "--"
@@ -452,11 +424,80 @@ private fun FlightModePanel(
 }
 
 @Composable
+private fun GuidedControlPanel(
+    enabled: Boolean,
+    onSend: (GuidedAction, Float) -> Unit,
+) {
+    var pending by remember { mutableStateOf<GuidedAction?>(null) }
+    GroupBox(title = "Guided Control", modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            GuidedAction.entries.forEach { action ->
+                ModeButton(
+                    label = action.label,
+                    active = false,
+                    enabled = enabled,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 2,
+                    onClick = { pending = action },
+                )
+            }
+        }
+    }
+    pending?.let { action ->
+        GuidedValueDialog(
+            action = action,
+            onDismiss = { pending = null },
+            onConfirm = { value ->
+                pending = null
+                onSend(action, value)
+            },
+        )
+    }
+}
+
+@Composable
+private fun GuidedValueDialog(
+    action: GuidedAction,
+    onDismiss: () -> Unit,
+    onConfirm: (Float) -> Unit,
+) {
+    var text by remember { mutableStateOf("") }
+    val value = text.toFloatOrNull()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(action.label) },
+        text = {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { entered ->
+                    text = entered.filter { it.isDigit() || it == '.' || it == '-' }.take(7)
+                },
+                label = { Text(action.unit) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { value?.let(onConfirm) },
+                enabled = value != null,
+            ) {
+                Text("Send")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
+}
+
+@Composable
 private fun ModeButton(
     label: String,
     active: Boolean,
     enabled: Boolean,
     modifier: Modifier = Modifier,
+    maxLines: Int = 1,
     onClick: () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -474,7 +515,14 @@ private fun ModeButton(
             disabledContentColor = scheme.onSurfaceVariant.copy(alpha = 0.5f),
         ),
     ) {
-        Text(label, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+        Text(
+            text = label,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            lineHeight = 13.sp,
+            textAlign = TextAlign.Center,
+            maxLines = maxLines,
+        )
     }
 }
 

@@ -60,6 +60,13 @@ data class LinkConfig(
     val port: Int = 14550,
 )
 
+/** Guided-mode adjustments, each driven by a single value typed by the pilot. */
+enum class GuidedAction(val label: String, val unit: String) {
+    SPEED("Change Speed", "m/s"),
+    ALTITUDE("Change Altitude", "m"),
+    LOITER_RADIUS("Change Loiter Radius", "m"),
+}
+
 enum class GcsCommand {
     ARM,
     DISARM,

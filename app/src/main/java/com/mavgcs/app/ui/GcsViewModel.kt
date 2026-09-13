@@ -2,6 +2,7 @@ package com.mavgcs.app.ui
 
 import androidx.lifecycle.ViewModel
 import com.mavgcs.app.mavlink.GcsCommand
+import com.mavgcs.app.mavlink.GuidedAction
 import com.mavgcs.app.mavlink.LinkConfig
 import com.mavgcs.app.mavlink.LinkType
 import com.mavgcs.app.mavlink.MavlinkClient
@@ -63,6 +64,14 @@ class GcsViewModel : ViewModel() {
 
     fun setFlightMode(mode: PlaneModeButton) {
         client.setFlightMode(mode.label, mode.customMode)
+    }
+
+    fun sendGuided(action: GuidedAction, value: Float) {
+        when (action) {
+            GuidedAction.SPEED -> client.changeSpeed(value)
+            GuidedAction.ALTITUDE -> client.changeAltitude(value)
+            GuidedAction.LOITER_RADIUS -> client.setLoiterRadius(value)
+        }
     }
 
     fun command(command: GcsCommand) {

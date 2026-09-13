@@ -11,7 +11,9 @@ import io.dronefleet.mavlink.common.GlobalPositionInt
 import io.dronefleet.mavlink.common.GpsRawInt
 import io.dronefleet.mavlink.common.HomePosition
 import io.dronefleet.mavlink.common.NavControllerOutput
+import io.dronefleet.mavlink.common.ParamSet
 import io.dronefleet.mavlink.common.MavCmd
+import io.dronefleet.mavlink.common.MavParamType
 import io.dronefleet.mavlink.common.RequestDataStream
 import io.dronefleet.mavlink.common.ScaledPressure
 import io.dronefleet.mavlink.common.SetMode
@@ -148,6 +150,59 @@ class MavlinkClient {
                 appendStatus("Sent mode $label")
             } catch (error: Exception) {
                 appendStatus("Mode change failed: ${error.message ?: error.javaClass.simpleName}")
+            }
+        }
+    }
+
+    /** Target airspeed in m/s, leaving the throttle to the autopilot. */
+    fun changeSpeed(metersPerSecond: Float) = guided("speed $metersPerSecond m/s") { connection, sys, comp ->
+        sendCommand(
+            connection,
+            sys,
+            comp,
+            MavCmd.MAV_CMD_DO_CHANGE_SPEED,
+            param1 = SPEED_TYPE_AIRSPEED.toFloat(),
+            param2 = metersPerSecond,
+            param3 = -1f,
+        )
+    }
+
+    /** Target altitude in metres above home. */
+    fun changeAltitude(meters: Float) = guided("altitude $meters m") { connection, sys, comp ->
+        sendCommand(
+            connection,
+            sys,
+            comp,
+            MavCmd.MAV_CMD_DO_CHANGE_ALTITUDE,
+            param1 = meters,
+            param2 = MAV_FRAME_GLOBAL_RELATIVE_ALT.toFloat(),
+        )
+    }
+
+    /**
+     * Loiter radius is a parameter rather than a command, so this is a PARAM_SET
+     * of WP_LOITER_RAD. ArduPilot takes every parameter as REAL32 over the wire.
+     */
+    fun setLoiterRadius(meters: Float) = guided("loiter radius $meters m") { connection, sys, comp ->
+        val request = ParamSet.builder()
+            .targetSystem(sys)
+            .targetComponent(comp)
+            .paramId(LOITER_RADIUS_PARAM)
+            .paramValue(meters)
+            .paramType(MavParamType.MAV_PARAM_TYPE_REAL32)
+            .build()
+        connection.send2(GCS_SYSTEM_ID, GCS_COMPONENT_ID, request)
+    }
+
+    private fun guided(description: String, block: (MavlinkConnection, Int, Int) -> Unit) {
+        val connection = connectionRef.get() ?: return
+        val (sys, comp) = target.get() ?: (1 to 1)
+        tx.execute {
+            try {
+                block(connection, sys, comp)
+                appendStatus("Sent $description")
+            } catch (error: Exception) {
+                appendStatus("Send failed: ${error.message ?: error.javaClass.simpleName}")
             }
         }
     }
@@ -483,6 +538,9 @@ class MavlinkClient {
         const val GCS_SYSTEM_ID = 255
         const val GCS_COMPONENT_ID = 190
         private const val MAV_MODE_FLAG_CUSTOM_MODE_ENABLED = 1
+        private const val MAV_FRAME_GLOBAL_RELATIVE_ALT = 3
+        private const val SPEED_TYPE_AIRSPEED = 0
+        private const val LOITER_RADIUS_PARAM = "WP_LOITER_RAD"
     }
 }
 
