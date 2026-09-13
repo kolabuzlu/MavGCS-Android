@@ -1,5 +1,8 @@
 package com.mavgcs.app.mavlink
 
+/** A single ArduPlane flight mode offered by the Flight Mode panel. */
+data class PlaneModeButton(val label: String, val customMode: Long)
+
 object FlightModes {
     private val copter = mapOf(
         0L to "STABILIZE",
@@ -35,13 +38,52 @@ object FlightModes {
         10L to "AUTO",
         11L to "RTL",
         12L to "LOITER",
+        13L to "TAKEOFF",
         14L to "AVOID_ADSB",
         15L to "GUIDED",
+        16L to "INITIALISING",
         17L to "QSTABILIZE",
+        18L to "QHOVER",
+        19L to "QLOITER",
         20L to "QLAND",
         21L to "QRTL",
-        22L to "QLOITER",
-        25L to "TAKEOFF",
+        22L to "QAUTOTUNE",
+        23L to "QACRO",
+        24L to "THERMAL",
+        25L to "LOITER_ALT_QLAND",
+        26L to "AUTOLAND",
+    )
+
+    /** Rows of the Flight Mode panel, laid out three across. */
+    val planeModeRows = listOf(
+        listOf(
+            PlaneModeButton("MANUAL", 0L),
+            PlaneModeButton("FBWA", 5L),
+            PlaneModeButton("CRUISE", 7L),
+        ),
+        listOf(
+            PlaneModeButton("LOITER", 12L),
+            PlaneModeButton("AUTO", 10L),
+            PlaneModeButton("RTL", 11L),
+        ),
+        listOf(
+            PlaneModeButton("TAKEOFF", 13L),
+            PlaneModeButton("AUTOLAND", 26L),
+            PlaneModeButton("AUTOTUNE", 8L),
+        ),
+    )
+
+    val planeGuidedMode = PlaneModeButton("GUIDED", 15L)
+
+    /** Quadplane modes, offered behind the VTOL dropdown. */
+    val vtolModes = listOf(
+        PlaneModeButton("QSTABILIZE", 17L),
+        PlaneModeButton("QHOVER", 18L),
+        PlaneModeButton("QLOITER", 19L),
+        PlaneModeButton("QLAND", 20L),
+        PlaneModeButton("QRTL", 21L),
+        PlaneModeButton("QAUTOTUNE", 22L),
+        PlaneModeButton("QACRO", 23L),
     )
 
     private val rover = mapOf(

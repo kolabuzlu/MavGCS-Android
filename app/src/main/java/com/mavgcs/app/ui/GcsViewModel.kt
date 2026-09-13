@@ -5,6 +5,7 @@ import com.mavgcs.app.mavlink.GcsCommand
 import com.mavgcs.app.mavlink.LinkConfig
 import com.mavgcs.app.mavlink.LinkType
 import com.mavgcs.app.mavlink.MavlinkClient
+import com.mavgcs.app.mavlink.PlaneModeButton
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -58,6 +59,10 @@ class GcsViewModel : ViewModel() {
             ),
         )
         _form.update { it.copy(listening = true) }
+    }
+
+    fun setFlightMode(mode: PlaneModeButton) {
+        client.setFlightMode(mode.label, mode.customMode)
     }
 
     fun command(command: GcsCommand) {

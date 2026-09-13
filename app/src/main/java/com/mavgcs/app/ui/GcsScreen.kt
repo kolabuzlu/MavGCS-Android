@@ -1,33 +1,43 @@
 package com.mavgcs.app.ui
 
 import android.graphics.Paint
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,8 +49,10 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.mavgcs.app.mavlink.FlightModes
 import com.mavgcs.app.mavlink.GcsCommand
 import com.mavgcs.app.mavlink.LinkType
+import com.mavgcs.app.mavlink.PlaneModeButton
 import com.mavgcs.app.mavlink.VehicleState
 import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
 import org.osmdroid.util.GeoPoint
@@ -133,7 +145,12 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                 }
 
                 TelemetryGrid(vehicle)
-                CommandPad(enabled = vehicle.linkUp, onCommand = viewModel::command)
+                ArmPad(enabled = vehicle.linkUp, onCommand = viewModel::command)
+                FlightModePanel(
+                    enabled = vehicle.linkUp,
+                    currentMode = vehicle.mode,
+                    onSelect = viewModel::setFlightMode,
+                )
 
                 Text("STATUS", fontWeight = FontWeight.Bold, color = scheme.primary)
                 Column(
@@ -270,31 +287,164 @@ private fun MetricCard(label: String, value: String, modifier: Modifier = Modifi
 }
 
 @Composable
-private fun CommandPad(enabled: Boolean, onCommand: (GcsCommand) -> Unit) {
+private fun ArmPad(enabled: Boolean, onCommand: (GcsCommand) -> Unit) {
     val scheme = MaterialTheme.colorScheme
     Text("COMMANDS", fontWeight = FontWeight.Bold, color = scheme.primary)
-    val rows = listOf(
-        listOf(GcsCommand.ARM to "ARM", GcsCommand.DISARM to "DISARM"),
-        listOf(GcsCommand.TAKEOFF to "TAKEOFF 10m", GcsCommand.LAND to "LAND"),
-        listOf(GcsCommand.LOITER to "LOITER", GcsCommand.RTL to "RTL"),
-        listOf(GcsCommand.GUIDED to "GUIDED", GcsCommand.AUTO to "AUTO"),
-        listOf(GcsCommand.STABILIZE to "STABILIZE"),
-    )
-    rows.forEach { row ->
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            row.forEach { (command, label) ->
-                val danger = command == GcsCommand.ARM || command == GcsCommand.DISARM || command == GcsCommand.LAND
-                Button(
-                    onClick = { onCommand(command) },
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        listOf(GcsCommand.ARM to "ARM", GcsCommand.DISARM to "DISARM").forEach { (command, label) ->
+            Button(
+                onClick = { onCommand(command) },
+                enabled = enabled,
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = scheme.error,
+                    contentColor = Color.White,
+                ),
+            ) {
+                Text(label, fontSize = 13.sp)
+            }
+        }
+    }
+}
+
+private val VtolPurple = Color(0xFFB39DDB)
+private val VtolPurpleText = Color(0xFF1B1033)
+
+/**
+ * ArduPlane flight modes as a titled group box. The border is drawn inside a
+ * top inset so the title can straddle the border line, which is what gives the
+ * group-box look; the title paints the panel background over the line behind it.
+ */
+@Composable
+private fun FlightModePanel(
+    enabled: Boolean,
+    currentMode: String,
+    onSelect: (PlaneModeButton) -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    Box(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 7.dp)
+                .border(1.dp, scheme.outline, RoundedCornerShape(8.dp))
+                .padding(start = 10.dp, end = 10.dp, top = 12.dp, bottom = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            FlightModes.planeModeRows.forEach { row ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    row.forEach { mode ->
+                        ModeButton(
+                            label = mode.label,
+                            active = currentMode == mode.label,
+                            enabled = enabled,
+                            modifier = Modifier.weight(1f),
+                            onClick = { onSelect(mode) },
+                        )
+                    }
+                }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ModeButton(
+                    label = FlightModes.planeGuidedMode.label,
+                    active = currentMode == FlightModes.planeGuidedMode.label,
                     enabled = enabled,
                     modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (danger) scheme.error else scheme.secondary,
-                        contentColor = if (danger) Color.White else scheme.onSecondary,
-                    ),
-                ) {
-                    Text(label, fontSize = 13.sp)
-                }
+                    onClick = { onSelect(FlightModes.planeGuidedMode) },
+                )
+                VtolModeButton(
+                    enabled = enabled,
+                    currentMode = currentMode,
+                    onSelect = onSelect,
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.weight(1f))
+            }
+        }
+        Text(
+            text = "Flight Mode",
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            color = scheme.onSurfaceVariant,
+            modifier = Modifier
+                .offset(x = 12.dp)
+                .background(scheme.surface)
+                .padding(horizontal = 4.dp),
+        )
+    }
+}
+
+@Composable
+private fun ModeButton(
+    label: String,
+    active: Boolean,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier.height(38.dp),
+        shape = RoundedCornerShape(6.dp),
+        contentPadding = PaddingValues(horizontal = 2.dp),
+        border = if (active) null else BorderStroke(1.dp, scheme.outline),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (active) scheme.error else scheme.surfaceVariant,
+            contentColor = if (active) Color.White else scheme.onSurface,
+            disabledContainerColor = scheme.surfaceVariant.copy(alpha = 0.4f),
+            disabledContentColor = scheme.onSurfaceVariant.copy(alpha = 0.5f),
+        ),
+    ) {
+        Text(label, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+    }
+}
+
+@Composable
+private fun VtolModeButton(
+    enabled: Boolean,
+    currentMode: String,
+    onSelect: (PlaneModeButton) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val active = FlightModes.vtolModes.any { it.label == currentMode }
+    Box(modifier = modifier) {
+        Button(
+            onClick = { expanded = true },
+            enabled = enabled,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(38.dp),
+            shape = RoundedCornerShape(6.dp),
+            contentPadding = PaddingValues(horizontal = 2.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = VtolPurple,
+                contentColor = VtolPurpleText,
+            ),
+        ) {
+            Text(
+                text = if (active) currentMode else "VTOL",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+            )
+            Icon(
+                imageVector = Icons.Filled.ArrowDropDown,
+                contentDescription = "VTOL modes",
+                modifier = Modifier.size(18.dp),
+            )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            FlightModes.vtolModes.forEach { mode ->
+                DropdownMenuItem(
+                    text = { Text(mode.label, fontSize = 13.sp) },
+                    onClick = {
+                        expanded = false
+                        onSelect(mode)
+                    },
+                )
             }
         }
     }

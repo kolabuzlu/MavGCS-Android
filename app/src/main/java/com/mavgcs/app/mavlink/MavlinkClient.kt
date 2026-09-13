@@ -111,6 +111,18 @@ class MavlinkClient {
         }
     }
 
+    /** Commands an explicit ArduPilot custom mode, used by the Flight Mode panel. */
+    fun setFlightMode(label: String, customMode: Long) {
+        val connection = connectionRef.get() ?: return
+        val (sys, comp) = target.get() ?: (1 to 1)
+        try {
+            sendModeChange(connection, sys, comp, customMode)
+            appendStatus("Sent mode $label")
+        } catch (error: Exception) {
+            appendStatus("Mode change failed: ${error.message ?: error.javaClass.simpleName}")
+        }
+    }
+
     private fun runUdp(config: LinkConfig) {
         val bindHost = if (config.host.isBlank()) "0.0.0.0" else config.host
         val socket = DatagramSocket(null).apply {
@@ -350,16 +362,25 @@ class MavlinkClient {
             Firmware.PX4 -> FlightModes.px4CustomMode(command)
             else -> FlightModes.ardupilotCustomMode(snapshot.vehicleType, command)
         } ?: return
+        sendModeChange(connection, sys, snapshot.componentId, custom)
+    }
+
+    private fun sendModeChange(
+        connection: MavlinkConnection,
+        sys: Int,
+        comp: Int,
+        custom: Long,
+    ) {
         val mode = SetMode.builder()
             .targetSystem(sys)
-            .baseMode(EnumValue.create(1))
+            .baseMode(EnumValue.create(MAV_MODE_FLAG_CUSTOM_MODE_ENABLED))
             .customMode(custom)
             .build()
         connection.send2(GCS_SYSTEM_ID, GCS_COMPONENT_ID, mode)
         sendCommand(
             connection,
             sys,
-            snapshot.componentId,
+            comp,
             MavCmd.MAV_CMD_DO_SET_MODE,
             param1 = MAV_MODE_FLAG_CUSTOM_MODE_ENABLED.toFloat(),
             param2 = custom.toFloat(),
