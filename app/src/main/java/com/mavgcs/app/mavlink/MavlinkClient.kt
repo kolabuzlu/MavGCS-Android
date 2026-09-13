@@ -2,15 +2,21 @@ package com.mavgcs.app.mavlink
 
 import io.dronefleet.mavlink.MavlinkConnection
 import io.dronefleet.mavlink.MavlinkMessage
+import io.dronefleet.mavlink.ardupilotmega.Rangefinder
+import io.dronefleet.mavlink.ardupilotmega.Wind
 import io.dronefleet.mavlink.common.Attitude
 import io.dronefleet.mavlink.common.BatteryStatus
 import io.dronefleet.mavlink.common.CommandLong
 import io.dronefleet.mavlink.common.GlobalPositionInt
 import io.dronefleet.mavlink.common.GpsRawInt
+import io.dronefleet.mavlink.common.HomePosition
+import io.dronefleet.mavlink.common.NavControllerOutput
 import io.dronefleet.mavlink.common.MavCmd
 import io.dronefleet.mavlink.common.RequestDataStream
+import io.dronefleet.mavlink.common.ScaledPressure
 import io.dronefleet.mavlink.common.SetMode
 import io.dronefleet.mavlink.common.Statustext
+import io.dronefleet.mavlink.common.TerrainReport
 import io.dronefleet.mavlink.common.SysStatus
 import io.dronefleet.mavlink.common.VfrHud
 import io.dronefleet.mavlink.minimal.Heartbeat
@@ -33,6 +39,12 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
+import kotlin.math.asin
+import kotlin.math.cos
+import kotlin.math.min
+import kotlin.math.pow
+import kotlin.math.sin
+import kotlin.math.sqrt
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -236,12 +248,15 @@ class MavlinkClient {
                 )
             }
             is GlobalPositionInt -> _state.update {
+                val lat = payload.lat() / 1e7
+                val lon = payload.lon() / 1e7
                 it.copy(
-                    lat = payload.lat() / 1e7,
-                    lon = payload.lon() / 1e7,
+                    lat = lat,
+                    lon = lon,
                     altMslM = payload.alt() / 1000f,
                     altRelM = payload.relativeAlt() / 1000f,
                     headingDeg = payload.hdg().takeIf { hdg -> hdg < 36000 }?.div(100f),
+                    distToHomeM = distanceMeters(lat, lon, it.homeLat, it.homeLon),
                 )
             }
             is GpsRawInt -> _state.update {
@@ -278,6 +293,30 @@ class MavlinkClient {
                     batteryA = payload.currentBattery().takeIf { c -> c != -1 }?.div(100f) ?: current.batteryA,
                     batteryV = if (millivolts > 0 && millivolts < 65535) millivolts / 1000f else current.batteryV,
                 )
+            }
+            is NavControllerOutput -> _state.update {
+                it.copy(distToWpM = payload.wpDist().toFloat())
+            }
+            is HomePosition -> _state.update {
+                val homeLat = payload.latitude() / 1e7
+                val homeLon = payload.longitude() / 1e7
+                it.copy(
+                    homeLat = homeLat,
+                    homeLon = homeLon,
+                    distToHomeM = distanceMeters(it.lat, it.lon, homeLat, homeLon),
+                )
+            }
+            is Wind -> _state.update {
+                it.copy(windDirectionDeg = payload.direction(), windSpeedMs = payload.speed())
+            }
+            is Rangefinder -> _state.update {
+                it.copy(rangefinderM = payload.distance())
+            }
+            is ScaledPressure -> _state.update {
+                it.copy(qnhHpa = qnhFrom(payload.pressAbs(), it.altMslM))
+            }
+            is TerrainReport -> _state.update {
+                it.copy(terrainAltM = payload.terrainHeight())
             }
             is Statustext -> appendStatus(payload.text())
         }
@@ -445,6 +484,27 @@ class MavlinkClient {
         const val GCS_COMPONENT_ID = 190
         private const val MAV_MODE_FLAG_CUSTOM_MODE_ENABLED = 1
     }
+}
+
+/** Great-circle distance in metres, or null unless both points are known. */
+private fun distanceMeters(lat1: Double?, lon1: Double?, lat2: Double?, lon2: Double?): Float? {
+    if (lat1 == null || lon1 == null || lat2 == null || lon2 == null) return null
+    val earthRadiusM = 6_371_000.0
+    val dLat = Math.toRadians(lat2 - lat1)
+    val dLon = Math.toRadians(lon2 - lon1)
+    val a = sin(dLat / 2).pow(2) +
+        cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2)) * sin(dLon / 2).pow(2)
+    // min() guards asin against a domain error from floating point drift above 1.
+    return (2 * earthRadiusM * asin(min(1.0, sqrt(a)))).toFloat()
+}
+
+/**
+ * Sea level pressure from the absolute reading, via the standard atmosphere.
+ * With no altitude to correct for, the absolute reading is already the answer.
+ */
+private fun qnhFrom(pressAbsHpa: Float, altMslM: Float?): Float {
+    val altitude = altMslM ?: return pressAbsHpa
+    return (pressAbsHpa * (1.0 - 0.0065 * altitude / 288.15).pow(-5.257)).toFloat()
 }
 
 private class PacketInputStream : InputStream() {

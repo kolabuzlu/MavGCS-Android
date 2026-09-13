@@ -50,6 +50,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -130,6 +131,13 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                     Text(if (form.listening) "Disconnect" else "Connect")
                 }
 
+                ArmPad(enabled = vehicle.linkUp, onCommand = viewModel::command)
+                FlightModePanel(
+                    enabled = vehicle.linkUp,
+                    currentMode = vehicle.mode,
+                    onSelect = viewModel::setFlightMode,
+                )
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -150,14 +158,7 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                         TelemetryLine("HDG", vehicle.headingDeg?.let { "${it.toInt()}°" } ?: "—")
                     }
                 }
-
                 TelemetryGrid(vehicle)
-                ArmPad(enabled = vehicle.linkUp, onCommand = viewModel::command)
-                FlightModePanel(
-                    enabled = vehicle.linkUp,
-                    currentMode = vehicle.mode,
-                    onSelect = viewModel::setFlightMode,
-                )
 
                 Text("STATUS", fontWeight = FontWeight.Bold, color = scheme.primary)
                 Column(
@@ -252,44 +253,69 @@ private fun TelemetryLine(label: String, value: String, color: Color = MaterialT
     }
 }
 
+private const val NO_DATA = "--"
+
+private data class TelemetryField(val label: String, val value: String)
+
 @Composable
 private fun TelemetryGrid(vehicle: VehicleState) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            MetricCard("ALT REL", vehicle.altRelM.format(1, " m"), Modifier.weight(1f))
-            MetricCard("ALT MSL", vehicle.altMslM.format(1, " m"), Modifier.weight(1f))
-            MetricCard("CLIMB", vehicle.climbMs.format(1, " m/s"), Modifier.weight(1f))
+    val fields = listOf(
+        TelemetryField("AirSpeed (m/s)", vehicle.airSpeedMs.format(1)),
+        TelemetryField("GroundSpeed (m/s)", vehicle.groundSpeedMs.format(1)),
+        TelemetryField("Vertical Speed (m/s)", vehicle.climbMs.format(1)),
+        TelemetryField("Altitude (m)", vehicle.altRelM.format(1)),
+        TelemetryField("Rangefinder (m)", vehicle.rangefinderM.format(2)),
+        TelemetryField("Dist to Home (m)", vehicle.distToHomeM.format(0)),
+        TelemetryField("Dist to WP (m)", vehicle.distToWpM.format(0)),
+        TelemetryField("Sat Count", vehicle.satellites.takeIf { it > 0 }?.toString() ?: NO_DATA),
+        TelemetryField("Roll (deg)", vehicle.rollDeg.format(1)),
+        TelemetryField("Pitch (deg)", vehicle.pitchDeg.format(1)),
+        TelemetryField("Yaw (deg)", vehicle.yawDeg.format(1)),
+        TelemetryField("Gps HDOP", vehicle.hdop.format(2)),
+        TelemetryField("Wind Direction (deg)", vehicle.windDirectionDeg.format(0)),
+        TelemetryField("Wind Velocity (kph)", vehicle.windSpeedMs?.times(3.6f).format(1)),
+        TelemetryField("QNH", vehicle.qnhHpa.format(1)),
+        TelemetryField("Terrain Alt (m)", vehicle.terrainAltM.format(1)),
+    )
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.background)
+            .padding(horizontal = 4.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        fields.chunked(4).forEach { row ->
+            Row(modifier = Modifier.fillMaxWidth()) {
+                row.forEach { field ->
+                    TelemetryCell(field, Modifier.weight(1f))
+                }
+            }
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            MetricCard("GS", vehicle.groundSpeedMs.format(1, " m/s"), Modifier.weight(1f))
-            MetricCard("AS", vehicle.airSpeedMs.format(1, " m/s"), Modifier.weight(1f))
-            MetricCard("THR", vehicle.throttlePct?.let { "$it %" } ?: "—", Modifier.weight(1f))
-        }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            MetricCard("BATT", vehicle.batteryV.format(1, " V"), Modifier.weight(1f))
-            MetricCard("CUR", vehicle.batteryA.format(1, " A"), Modifier.weight(1f))
-            MetricCard("REM", vehicle.batteryRemainingPct?.let { "$it %" } ?: "—", Modifier.weight(1f))
-        }
-        val lat = vehicle.lat
-        val lon = vehicle.lon
-        MetricCard(
-            "GPS",
-            if (lat != null && lon != null) "%.7f, %.7f".format(lat, lon) else "no position",
-            Modifier.fillMaxWidth(),
-        )
     }
 }
 
 @Composable
-private fun MetricCard(label: String, value: String, modifier: Modifier = Modifier) {
+private fun TelemetryCell(field: TelemetryField, modifier: Modifier = Modifier) {
     Column(
-        modifier = modifier
-            .clip(RoundedCornerShape(10.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .padding(10.dp),
+        modifier = modifier.padding(horizontal = 2.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(label, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(value, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        Text(
+            text = field.label,
+            fontSize = 9.sp,
+            lineHeight = 11.sp,
+            color = MaterialTheme.colorScheme.secondary,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
+        )
+        Text(
+            text = field.value,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+        )
     }
 }
 
@@ -555,7 +581,7 @@ private fun VehicleMap(vehicle: VehicleState) {
     )
 }
 
-private fun Float?.format(digits: Int, suffix: String): String {
-    val value = this ?: return "—"
-    return "%.${digits}f%s".format(value, suffix)
+private fun Float?.format(digits: Int): String {
+    val value = this ?: return NO_DATA
+    return "%.${digits}f".format(value)
 }

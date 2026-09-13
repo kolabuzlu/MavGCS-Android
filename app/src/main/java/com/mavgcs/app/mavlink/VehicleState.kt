@@ -31,6 +31,15 @@ data class VehicleState(
     val batteryV: Float? = null,
     val batteryA: Float? = null,
     val batteryRemainingPct: Int? = null,
+    val rangefinderM: Float? = null,
+    val distToHomeM: Float? = null,
+    val distToWpM: Float? = null,
+    val windDirectionDeg: Float? = null,
+    val windSpeedMs: Float? = null,
+    val qnhHpa: Float? = null,
+    val terrainAltM: Float? = null,
+    val homeLat: Double? = null,
+    val homeLon: Double? = null,
     val statusLog: List<String> = emptyList(),
 )
 
