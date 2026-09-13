@@ -457,7 +457,7 @@ private fun VtolModeButton(
     }
 }
 
-private const val PLANE_ICON_DP = 48
+private const val PLANE_ICON_DP = 96
 
 /**
  * planeicon.png is 722x605, far too large to use as a marker directly. It

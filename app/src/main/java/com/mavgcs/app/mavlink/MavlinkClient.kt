@@ -26,6 +26,8 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
@@ -46,6 +48,16 @@ class MavlinkClient {
     private var heartbeat: Thread? = null
     private var datagramSocket: DatagramSocket? = null
     private var tcpSocket: Socket? = null
+
+    /**
+     * Every outbound frame goes through this one thread. It keeps socket writes
+     * off the caller's thread -- button handlers run on the main thread, which
+     * Android forbids from touching a socket -- and serialises commands against
+     * the 1 Hz heartbeat so two frames cannot interleave mid-write on one stream.
+     */
+    private val tx: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "mavlink-tx").apply { isDaemon = true }
+    }
 
     fun connect(config: LinkConfig) {
         disconnect()
@@ -86,28 +98,30 @@ class MavlinkClient {
         val connection = connectionRef.get() ?: return
         val (sys, comp) = target.get() ?: (1 to 1)
         val snapshot = _state.value
-        try {
-            when (command) {
-                GcsCommand.ARM -> sendCommand(connection, sys, comp, MavCmd.MAV_CMD_COMPONENT_ARM_DISARM, 1f)
-                GcsCommand.DISARM -> sendCommand(connection, sys, comp, MavCmd.MAV_CMD_COMPONENT_ARM_DISARM, 0f)
-                GcsCommand.RTL -> sendCommand(connection, sys, comp, MavCmd.MAV_CMD_NAV_RETURN_TO_LAUNCH)
-                GcsCommand.LAND -> sendCommand(connection, sys, comp, MavCmd.MAV_CMD_NAV_LAND)
-                GcsCommand.TAKEOFF -> sendCommand(
-                    connection,
-                    sys,
-                    comp,
-                    MavCmd.MAV_CMD_NAV_TAKEOFF,
-                    param7 = 10f,
-                )
-                GcsCommand.LOITER,
-                GcsCommand.AUTO,
-                GcsCommand.STABILIZE,
-                GcsCommand.GUIDED,
-                -> setMode(connection, sys, snapshot, command)
+        tx.execute {
+            try {
+                when (command) {
+                    GcsCommand.ARM -> sendCommand(connection, sys, comp, MavCmd.MAV_CMD_COMPONENT_ARM_DISARM, 1f)
+                    GcsCommand.DISARM -> sendCommand(connection, sys, comp, MavCmd.MAV_CMD_COMPONENT_ARM_DISARM, 0f)
+                    GcsCommand.RTL -> sendCommand(connection, sys, comp, MavCmd.MAV_CMD_NAV_RETURN_TO_LAUNCH)
+                    GcsCommand.LAND -> sendCommand(connection, sys, comp, MavCmd.MAV_CMD_NAV_LAND)
+                    GcsCommand.TAKEOFF -> sendCommand(
+                        connection,
+                        sys,
+                        comp,
+                        MavCmd.MAV_CMD_NAV_TAKEOFF,
+                        param7 = 10f,
+                    )
+                    GcsCommand.LOITER,
+                    GcsCommand.AUTO,
+                    GcsCommand.STABILIZE,
+                    GcsCommand.GUIDED,
+                    -> setMode(connection, sys, snapshot, command)
+                }
+                appendStatus("Sent ${command.name}")
+            } catch (error: Exception) {
+                appendStatus("Send failed: ${error.message ?: error.javaClass.simpleName}")
             }
-            appendStatus("Sent ${command.name}")
-        } catch (error: Exception) {
-            appendStatus("Send failed: ${error.message ?: error.javaClass.simpleName}")
         }
     }
 
@@ -115,11 +129,13 @@ class MavlinkClient {
     fun setFlightMode(label: String, customMode: Long) {
         val connection = connectionRef.get() ?: return
         val (sys, comp) = target.get() ?: (1 to 1)
-        try {
-            sendModeChange(connection, sys, comp, customMode)
-            appendStatus("Sent mode $label")
-        } catch (error: Exception) {
-            appendStatus("Mode change failed: ${error.message ?: error.javaClass.simpleName}")
+        tx.execute {
+            try {
+                sendModeChange(connection, sys, comp, customMode)
+                appendStatus("Sent mode $label")
+            } catch (error: Exception) {
+                appendStatus("Mode change failed: ${error.message ?: error.javaClass.simpleName}")
+            }
         }
     }
 
@@ -173,7 +189,7 @@ class MavlinkClient {
         connectionRef.set(connection)
         heartbeat = thread(name = "mavlink-hb", isDaemon = true) {
             while (running.get() && !Thread.currentThread().isInterrupted) {
-                runCatching { sendHeartbeat(connection) }
+                runCatching { tx.execute { runCatching { sendHeartbeat(connection) } } }
                 Thread.sleep(1000)
             }
         }
@@ -308,7 +324,7 @@ class MavlinkClient {
             .reqMessageRate(4)
             .startStop(1)
             .build()
-        connection.send2(GCS_SYSTEM_ID, GCS_COMPONENT_ID, request)
+        tx.execute { runCatching { connection.send2(GCS_SYSTEM_ID, GCS_COMPONENT_ID, request) } }
     }
 
     private fun sendHeartbeat(connection: MavlinkConnection) {
