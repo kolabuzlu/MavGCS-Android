@@ -140,7 +140,9 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                 ) {
                     MessagesPanel(
                         statusLog = vehicle.statusLog,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(TopPanelHeight),
                     )
                     ConnectionPanel(
                         form = form,
@@ -148,7 +150,9 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                         onHost = viewModel::setHost,
                         onPort = viewModel::setPort,
                         onToggle = viewModel::toggleConnection,
-                        modifier = Modifier.width(340.dp),
+                        modifier = Modifier
+                            .width(340.dp)
+                            .height(TopPanelHeight),
                     )
                 }
                 Box(
@@ -219,6 +223,9 @@ private fun TelemetryLine(label: String, value: String, color: Color = MaterialT
 }
 
 private const val NO_DATA = "--"
+
+/** Messages and Connection share one height so their bottoms line up. */
+private val TopPanelHeight = 184.dp
 
 private data class TelemetryField(val label: String, val value: String)
 
@@ -391,12 +398,15 @@ private fun ConnectionPanel(
         }
         Button(
             onClick = onToggle,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(40.dp),
+            contentPadding = PaddingValues(horizontal = 8.dp),
             colors = ButtonDefaults.buttonColors(
                 containerColor = if (form.listening) scheme.error else scheme.primary,
             ),
         ) {
-            Text(if (form.listening) "Disconnect" else "Connect")
+            Text(if (form.listening) "Disconnect" else "Connect", fontSize = 14.sp)
         }
     }
 }
@@ -412,7 +422,7 @@ private fun MessagesPanel(statusLog: List<String>, modifier: Modifier = Modifier
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(132.dp)
+                .weight(1f)
                 .verticalScroll(rememberScrollState()),
         ) {
             if (statusLog.isEmpty()) {
