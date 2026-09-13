@@ -12,6 +12,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -92,45 +93,6 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Text("LINK", fontWeight = FontWeight.Bold, color = scheme.primary)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(
-                        selected = form.type == LinkType.UDP,
-                        onClick = { viewModel.setType(LinkType.UDP) },
-                        label = { Text("UDP listen") },
-                    )
-                    FilterChip(
-                        selected = form.type == LinkType.TCP,
-                        onClick = { viewModel.setType(LinkType.TCP) },
-                        label = { Text("TCP") },
-                    )
-                }
-                OutlinedTextField(
-                    value = form.host,
-                    onValueChange = viewModel::setHost,
-                    label = { Text(if (form.type == LinkType.UDP) "Bind address" else "Host") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = !form.listening,
-                )
-                OutlinedTextField(
-                    value = form.port,
-                    onValueChange = viewModel::setPort,
-                    label = { Text("Port") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = !form.listening,
-                )
-                Button(
-                    onClick = viewModel::toggleConnection,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (form.listening) scheme.error else scheme.primary,
-                    ),
-                ) {
-                    Text(if (form.listening) "Disconnect" else "Connect")
-                }
-
                 ArmPad(enabled = vehicle.linkUp, onCommand = viewModel::command)
                 FlightModePanel(
                     enabled = vehicle.linkUp,
@@ -164,25 +126,6 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                     }
                 }
                 TelemetryGrid(vehicle)
-
-                Text("STATUS", fontWeight = FontWeight.Bold, color = scheme.primary)
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(140.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(scheme.surfaceVariant)
-                        .padding(8.dp)
-                        .verticalScroll(rememberScrollState()),
-                ) {
-                    if (vehicle.statusLog.isEmpty()) {
-                        Text("Waiting for STATUSTEXT…", color = scheme.onSurfaceVariant, fontSize = 12.sp)
-                    } else {
-                        vehicle.statusLog.takeLast(8).forEach { line ->
-                            Text(line, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-                        }
-                    }
-                }
             }
             Column(
                 modifier = Modifier
@@ -191,6 +134,23 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 StatusBar(vehicle)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    MessagesPanel(
+                        statusLog = vehicle.statusLog,
+                        modifier = Modifier.weight(1f),
+                    )
+                    ConnectionPanel(
+                        form = form,
+                        onType = viewModel::setType,
+                        onHost = viewModel::setHost,
+                        onPort = viewModel::setPort,
+                        onToggle = viewModel::toggleConnection,
+                        modifier = Modifier.width(340.dp),
+                    )
+                }
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -349,18 +309,19 @@ private val VtolPurple = Color(0xFFB39DDB)
 private val VtolPurpleText = Color(0xFF1B1033)
 
 /**
- * ArduPlane flight modes as a titled group box. The border is drawn inside a
- * top inset so the title can straddle the border line, which is what gives the
- * group-box look; the title paints the panel background over the line behind it.
+ * A titled group box in the desktop's style. The border sits inside a top inset
+ * so the title can straddle it; the title paints [titleBackground] over the line
+ * behind it, so that colour has to match whatever the box is sitting on.
  */
 @Composable
-private fun FlightModePanel(
-    enabled: Boolean,
-    currentMode: String,
-    onSelect: (PlaneModeButton) -> Unit,
+private fun GroupBox(
+    title: String,
+    modifier: Modifier = Modifier,
+    titleBackground: Color = MaterialTheme.colorScheme.surface,
+    content: @Composable ColumnScope.() -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
-    Box(modifier = Modifier.fillMaxWidth()) {
+    Box(modifier = modifier) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -368,47 +329,143 @@ private fun FlightModePanel(
                 .border(1.dp, scheme.outline, RoundedCornerShape(8.dp))
                 .padding(start = 10.dp, end = 10.dp, top = 12.dp, bottom = 10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            FlightModes.planeModeRows.forEach { row ->
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    row.forEach { mode ->
-                        ModeButton(
-                            label = mode.label,
-                            active = currentMode == mode.label,
-                            enabled = enabled,
-                            modifier = Modifier.weight(1f),
-                            onClick = { onSelect(mode) },
-                        )
-                    }
-                }
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ModeButton(
-                    label = FlightModes.planeGuidedMode.label,
-                    active = currentMode == FlightModes.planeGuidedMode.label,
-                    enabled = enabled,
-                    modifier = Modifier.weight(1f),
-                    onClick = { onSelect(FlightModes.planeGuidedMode) },
-                )
-                VtolModeButton(
-                    enabled = enabled,
-                    currentMode = currentMode,
-                    onSelect = onSelect,
-                    modifier = Modifier.weight(1f),
-                )
-                Spacer(Modifier.weight(1f))
-            }
-        }
+            content = content,
+        )
         Text(
-            text = "Flight Mode",
+            text = title,
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold,
             color = scheme.onSurfaceVariant,
             modifier = Modifier
                 .offset(x = 12.dp)
-                .background(scheme.surface)
+                .background(titleBackground)
                 .padding(horizontal = 4.dp),
         )
+    }
+}
+
+@Composable
+private fun ConnectionPanel(
+    form: ConnectionForm,
+    onType: (LinkType) -> Unit,
+    onHost: (String) -> Unit,
+    onPort: (String) -> Unit,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val scheme = MaterialTheme.colorScheme
+    GroupBox(
+        title = "Connection",
+        modifier = modifier,
+        titleBackground = scheme.background,
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(
+                selected = form.type == LinkType.UDP,
+                onClick = { onType(LinkType.UDP) },
+                label = { Text("UDP listen", fontSize = 12.sp) },
+            )
+            FilterChip(
+                selected = form.type == LinkType.TCP,
+                onClick = { onType(LinkType.TCP) },
+                label = { Text("TCP", fontSize = 12.sp) },
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = form.host,
+                onValueChange = onHost,
+                label = { Text(if (form.type == LinkType.UDP) "Bind address" else "Host", fontSize = 11.sp) },
+                singleLine = true,
+                modifier = Modifier.weight(1.6f),
+                enabled = !form.listening,
+            )
+            OutlinedTextField(
+                value = form.port,
+                onValueChange = onPort,
+                label = { Text("Port", fontSize = 11.sp) },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+                enabled = !form.listening,
+            )
+        }
+        Button(
+            onClick = onToggle,
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = if (form.listening) scheme.error else scheme.primary,
+            ),
+        ) {
+            Text(if (form.listening) "Disconnect" else "Connect")
+        }
+    }
+}
+
+@Composable
+private fun MessagesPanel(statusLog: List<String>, modifier: Modifier = Modifier) {
+    val scheme = MaterialTheme.colorScheme
+    GroupBox(
+        title = "Messages",
+        modifier = modifier,
+        titleBackground = scheme.background,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(132.dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            if (statusLog.isEmpty()) {
+                Text(
+                    text = "Waiting for STATUSTEXT…",
+                    color = scheme.onSurfaceVariant,
+                    fontSize = 12.sp,
+                )
+            } else {
+                statusLog.forEach { line ->
+                    Text(line, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FlightModePanel(
+    enabled: Boolean,
+    currentMode: String,
+    onSelect: (PlaneModeButton) -> Unit,
+) {
+    GroupBox(title = "Flight Mode", modifier = Modifier.fillMaxWidth()) {
+        FlightModes.planeModeRows.forEach { row ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                row.forEach { mode ->
+                    ModeButton(
+                        label = mode.label,
+                        active = currentMode == mode.label,
+                        enabled = enabled,
+                        modifier = Modifier.weight(1f),
+                        onClick = { onSelect(mode) },
+                    )
+                }
+            }
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ModeButton(
+                label = FlightModes.planeGuidedMode.label,
+                active = currentMode == FlightModes.planeGuidedMode.label,
+                enabled = enabled,
+                modifier = Modifier.weight(1f),
+                onClick = { onSelect(FlightModes.planeGuidedMode) },
+            )
+            VtolModeButton(
+                enabled = enabled,
+                currentMode = currentMode,
+                onSelect = onSelect,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.weight(1f))
+        }
     }
 }
 

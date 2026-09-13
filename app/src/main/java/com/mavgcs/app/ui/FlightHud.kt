@@ -283,16 +283,19 @@ private fun DrawScope.drawHeadingStrip(headingDeg: Float, measurer: TextMeasurer
             end = Offset(x, height),
             strokeWidth = 1.5f,
         )
-        // Compass tapes label in tens of degrees: 300 shows as 30, 30 shows as 03.
-        val normalized = (((deg % 360f) + 360f) % 360f / 10f).roundToInt() % 36
-        val text = measurer.measure(
-            AnnotatedString(normalized.toString().padStart(2, '0')),
-            hudLabelStyle,
-        )
-        drawText(
-            textLayoutResult = text,
-            topLeft = Offset(x - text.size.width / 2f, 1f),
-        )
+        // Labelled every 30 degrees as a compass reads: 000, 030 ... 330, then
+        // 000 again. Ticks stay every 10 so the scale is still fine-grained.
+        if (((deg % 30f) + 30f) % 30f < 0.01f) {
+            val normalized = (((deg % 360f) + 360f) % 360f).roundToInt() % 360
+            val text = measurer.measure(
+                AnnotatedString(normalized.toString().padStart(3, '0')),
+                hudLabelStyle,
+            )
+            drawText(
+                textLayoutResult = text,
+                topLeft = Offset(x - text.size.width / 2f, 1f),
+            )
+        }
         deg += 10f
     }
 
