@@ -536,7 +536,10 @@ private fun VehicleMap(vehicle: VehicleState) {
                     icon = planeIcon
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                     title = vehicle.mode
-                    rotation = vehicle.headingDeg ?: vehicle.yawDeg
+                    // osmdroid negates the bearing before it reaches
+                    // Canvas.rotate, so a compass heading must be negated
+                    // here to turn the icon the right way.
+                    rotation = -(vehicle.headingDeg ?: vehicle.yawDeg)
                 }
                 if (firstFix) {
                     map.controller.setZoom(18.0)
