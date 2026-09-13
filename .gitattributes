@@ -1,0 +1,15 @@
+# Normalize line endings on commit
+* text=auto
+
+# Shell scripts must keep LF or they break on Unix
+gradlew text eol=lf
+*.sh text eol=lf
+
+# Windows scripts must keep CRLF
+*.bat text eol=crlf
+
+# Treat these as binary
+*.jar binary
+*.png binary
+*.ico binary
+*.apk binary

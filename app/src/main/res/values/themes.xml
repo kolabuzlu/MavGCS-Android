@@ -1,0 +1,8 @@
+<resources>
+    <style name="Theme.MavGCS" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">@color/gcs_bg</item>
+        <item name="android:navigationBarColor">@color/gcs_bg</item>
+        <item name="android:windowBackground">@color/gcs_bg</item>
+        <item name="android:windowFullscreen">false</item>
+    </style>
+</resources>
