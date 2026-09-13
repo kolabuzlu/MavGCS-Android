@@ -26,6 +26,7 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.SocketException
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
@@ -145,7 +146,19 @@ class MavlinkClient {
             reuseAddress = true
             broadcast = true
             soTimeout = 1000
-            bind(InetSocketAddress(InetAddress.getByName(bindHost), config.port))
+        }
+        try {
+            socket.bind(InetSocketAddress(InetAddress.getByName(bindHost), config.port))
+        } catch (error: SocketException) {
+            // For UDP this field is a local bind address, but the same field holds a
+            // remote host in TCP mode and carries over when the type is switched. A
+            // remote address is not assignable here and fails with EADDRNOTAVAIL, so
+            // fall back to every interface rather than dead-ending on it.
+            if (bindHost == "0.0.0.0") {
+                throw error
+            }
+            appendStatus("Cannot bind $bindHost here, listening on 0.0.0.0 instead")
+            socket.bind(InetSocketAddress(InetAddress.getByName("0.0.0.0"), config.port))
         }
         datagramSocket = socket
         val remote = AtomicReference<InetSocketAddress?>(null)
