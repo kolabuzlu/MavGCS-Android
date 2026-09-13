@@ -362,7 +362,13 @@ class MavlinkClient {
                 )
             }
             is Wind -> _state.update {
-                it.copy(windDirectionDeg = payload.direction(), windSpeedMs = payload.speed())
+                it.copy(
+                    // ArduPilot wraps this to -180..180, so a westerly reads as
+                    // -13 rather than 347. Normalised here so the stored bearing
+                    // is a compass value, as headingDeg already is.
+                    windDirectionDeg = ((payload.direction() % 360f) + 360f) % 360f,
+                    windSpeedMs = payload.speed(),
+                )
             }
             is Rangefinder -> _state.update {
                 it.copy(rangefinderM = payload.distance())
