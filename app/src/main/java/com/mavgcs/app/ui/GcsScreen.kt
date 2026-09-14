@@ -796,8 +796,10 @@ private fun ModeButton(
         contentPadding = PaddingValues(horizontal = 2.dp),
         border = if (active) null else BorderStroke(1.dp, scheme.outline),
         colors = ButtonDefaults.buttonColors(
-            containerColor = if (active) scheme.error else scheme.surfaceVariant,
-            contentColor = if (active) Color.White else scheme.onSurface,
+            // Green marks the engaged mode. Red is kept for the link being down
+            // and for a failed command, so it never doubles as "this is current".
+            containerColor = if (active) scheme.primary else scheme.surfaceVariant,
+            contentColor = if (active) scheme.onPrimary else scheme.onSurface,
             disabledContainerColor = scheme.surfaceVariant.copy(alpha = 0.4f),
             disabledContentColor = scheme.onSurfaceVariant.copy(alpha = 0.5f),
         ),
