@@ -29,5 +29,4 @@ Created by **Derin Hakan Karakurt**
 ### Installing & Running MavGCS (Android)
 
 Download `MavGCS-<version>.apk` from the
-[Releases page](https://github.com/kolabuzlu/MavGCS-Android/releases), install it,
-and run the app.
+[Releases page](https://github.com/kolabuzlu/MavGCS-Android/releases), install it, run the app.
