@@ -138,10 +138,24 @@ function start(token) {
     // moved it would be lying about where the aeroplane is pointing.
     viewer.scene.screenSpaceCameraController.enableInputs = false;
     viewer.scene.globe.depthTestAgainstTerrain = true;
-    // Full panel resolution, and the rest of what Cesium offers left on:
-    // FXAA over the top of the MSAA, and the fog and ground atmosphere that
-    // give distance something to read against. All of it was off while the
-    // question was whether this could run at all.
+    // Render at the screen's real pixels, not CSS pixels.
+    //
+    // Cesium's default sizes the drawing buffer to the CSS box and ignores the
+    // device pixel ratio, which is a sensible default on a desktop monitor
+    // where the two are the same. This panel is 472x256 CSS on a 2.125x
+    // display, so the globe was being drawn 472 across and stretched over 1003
+    // real pixels: a soft image with a visibly stepped horizon that no amount
+    // of MSAA can fix, because the staircase is in the upscale, not the edge.
+    //
+    // Measured on the tablet: 60fps at the CSS size against 42 here, for 4.5x
+    // the pixels. Well clear of the few-hertz rate the camera is actually
+    // flown at, which is the rate that decides whether this looks right.
+    viewer.useBrowserRecommendedResolution = false;
+    viewer.resolutionScale = 1.0;
+    // The rest of what Cesium offers is left on: the fog and ground atmosphere
+    // that give distance something to read against. All of it was off while
+    // the question was whether this could run at all. (FXAA is not among them
+    // — Cesium drops it when MSAA is on, and the two would be redundant.)
     document.getElementById('message').style.display = 'none';
     started = true;
   } catch (e) {
