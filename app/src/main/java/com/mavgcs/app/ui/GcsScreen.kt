@@ -1275,7 +1275,7 @@ private fun predictedTrack(
     return points
 }
 
-private const val HOME_ICON_DP = 36
+private const val HOME_ICON_DP = 72
 
 /** The home badge, scaled once the same way the aircraft marker is. */
 private fun homeMarkerIcon(context: Context): Drawable {
