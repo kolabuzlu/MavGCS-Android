@@ -47,14 +47,17 @@
   }
   .cesium-widget-credits {
       position:fixed !important;
-      left:calc(50% + 64px) !important; right:112px !important; bottom:3px !important;
-      font-size:8px !important;
-      line-height:11px !important;
-      display:flex !important;
-      align-items:center;
-      gap:4px;
-      overflow:hidden;
-      white-space:nowrap;
+      /* The true gap between the VIBE flag and the FPV switch. */
+      left:calc(50% + 52px) !important; right:100px !important; bottom:2px !important;
+      /* Small enough that the whole notice fits across two lines. The text is
+         set in full on purpose: it is Cesium's, the free tier requires it, and
+         a credit chopped off mid-word is worse than a small one. */
+      font-size:6px !important;
+      line-height:7.5px !important;
+      display:block !important;
+      white-space:normal !important;
+      overflow:visible;
+      text-align:left;
   }
   /* The logo ships at a size meant for a full browser window. */
   .cesium-credit-logoContainer img { height:11px !important; width:auto !important; }
