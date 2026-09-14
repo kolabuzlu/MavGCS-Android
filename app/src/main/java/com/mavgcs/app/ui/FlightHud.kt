@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
@@ -44,6 +45,7 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mavgcs.app.ui.theme.MavGreen
+import com.mavgcs.app.mavlink.CesiumSettings
 import com.mavgcs.app.mavlink.HealthTint
 import com.mavgcs.app.mavlink.VehicleState
 import kotlin.math.abs
@@ -69,6 +71,9 @@ private val HeadingStripHeight = 18.dp
  * below the heading strip, so the pair line up with each other.
  */
 private val CornerInset = 6.dp
+
+/** How far down the three blocks along the top of the HUD sit. */
+private val CornerTop = HeadingStripHeight + CornerInset
 
 /**
  * The battery block's first column, wide enough for the longest pack voltage.
@@ -130,6 +135,10 @@ fun FlightHud(vehicle: VehicleState, modifier: Modifier = Modifier) {
     // Remembered across runs: the pack on the aircraft does not change between
     // one launch of the app and the next.
     var cells by remember { mutableStateOf(loadCellCount(context)) }
+    var fpv by remember { mutableStateOf(false) }
+    // Re-read when the view is switched on, so a token pasted into Settings
+    // takes effect without restarting the app.
+    val cesiumToken = remember(fpv) { CesiumSettings.token(context) }
     BoxWithConstraints(
         modifier = modifier
             .clip(RoundedCornerShape(10.dp))
@@ -138,8 +147,20 @@ fun FlightHud(vehicle: VehicleState, modifier: Modifier = Modifier) {
         // On a short tablet the HUD shrinks enough that the battery block and the
         // position readouts collide, so the overlays tighten with it.
         val compact = maxHeight < 130.dp
+        // Underneath everything: the 3D scene stands in for the drawn
+        // horizon, and every overlay below carries on over the top of it
+        // unchanged, so the two views cannot say different things.
+        if (fpv) {
+            FpvView(
+                vehicle = vehicle,
+                token = cesiumToken,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
         Canvas(modifier = Modifier.fillMaxSize()) {
-            drawHorizon(vehicle.rollDeg ?: 0f, vehicle.pitchDeg ?: 0f, measurer)
+            if (!fpv) {
+                drawHorizon(vehicle.rollDeg ?: 0f, vehicle.pitchDeg ?: 0f, measurer)
+            }
             drawVerticalTape(
                 value = vehicle.airSpeedMs,
                 tickStep = 2f,
@@ -160,6 +181,19 @@ fun FlightHud(vehicle: VehicleState, modifier: Modifier = Modifier) {
             drawThrottleBar(vehicle.throttlePct, measurer)
             drawVerticalSpeedBar(vehicle.climbMs, measurer)
         }
+
+        // The switch itself, in the corner the instruments leave free.
+        FpvToggle(
+            on = fpv,
+            compact = compact,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(
+                    // Flush with the battery block's own edge, directly above it.
+                    end = TapeWidth + VsiBarWidth + CornerInset,
+                    bottom = CornerInset,
+                ),
+        ) { fpv = !fpv }
 
         HudCaption(
             text = "IAS m/s",
@@ -187,7 +221,7 @@ fun FlightHud(vehicle: VehicleState, modifier: Modifier = Modifier) {
                 .align(Alignment.TopStart)
                 .padding(
                     start = TapeWidth + ThrottleBarWidth + CornerInset,
-                    top = HeadingStripHeight + CornerInset,
+                    top = CornerTop,
                 ),
         )
 
@@ -202,7 +236,7 @@ fun FlightHud(vehicle: VehicleState, modifier: Modifier = Modifier) {
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .padding(
-                    top = HeadingStripHeight + CornerInset,
+                    top = CornerTop,
                     end = TapeWidth + VsiBarWidth + CornerInset,
                 )
                 // As wide as the longer row needs, so the shorter one has a
@@ -317,6 +351,37 @@ private fun HudCaption(text: String, modifier: Modifier = Modifier) {
  * The figure stays in degrees true, because that is what gets read back on the
  * radio and compared with the forecast; only the arrow is relative.
  */
+/**
+ * Switches the HUD between the drawn horizon and the 3D view.
+ *
+ * Lit in the palette's blue when the 3D view is up. Deliberately not the
+ * green every other lit control uses: those mean armed, engaged, or healthy,
+ * and which of two views is on screen is not that kind of state.
+ */
+@Composable
+private fun FpvToggle(
+    on: Boolean,
+    compact: Boolean,
+    modifier: Modifier = Modifier,
+    onToggle: () -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(if (on) scheme.secondary else TapeBackground)
+            .clickable(onClick = onToggle)
+            .padding(horizontal = 9.dp, vertical = if (compact) 2.dp else 4.dp),
+    ) {
+        Text(
+            text = "FPV",
+            fontSize = if (compact) 9.sp else 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = if (on) scheme.onSecondary else HudTextColor.copy(alpha = 0.8f),
+        )
+    }
+}
+
 @Composable
 private fun WindBox(
     fromDeg: Float?,

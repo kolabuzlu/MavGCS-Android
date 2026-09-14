@@ -18,8 +18,10 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -43,6 +45,7 @@ import com.mavgcs.app.cache.MAP_CACHE_LIMITS
 import com.mavgcs.app.cache.MapTileCache
 import com.mavgcs.app.cache.TERRAIN_CACHE_LIMITS
 import com.mavgcs.app.cache.formatCacheSize
+import com.mavgcs.app.mavlink.CesiumSettings
 import com.mavgcs.app.mavlink.StreamRates
 import com.mavgcs.app.mavlink.TelemetrySettings
 import com.mavgcs.app.terrain.TerrainDiskCache
@@ -82,6 +85,7 @@ fun SettingsDialog(onDismiss: () -> Unit, onRatesChanged: (StreamRates) -> Unit)
     var mapStats by remember { mutableStateOf(CacheStats()) }
     var terrainStats by remember { mutableStateOf(CacheStats()) }
     var confirming by remember { mutableStateOf<CacheKind?>(null) }
+    var cesiumToken by remember { mutableStateOf(CesiumSettings.token(context)) }
     var attitudeHz by remember { mutableStateOf(TelemetrySettings.attitudeHz(context)) }
     var positionHz by remember { mutableStateOf(TelemetrySettings.positionHz(context)) }
     var fullTelemetry by remember { mutableStateOf(TelemetrySettings.fullTelemetry(context)) }
@@ -108,6 +112,34 @@ fun SettingsDialog(onDismiss: () -> Unit, onRatesChanged: (StreamRates) -> Unit)
         title = { Text("Settings") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Text(
+                    text = "3D view",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    text = "The FPV view streams terrain and imagery from " +
+                        "Cesium Ion, which needs a free account. Create one at " +
+                        "cesium.com/ion and paste the access token here. It " +
+                        "stays on this tablet.",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    value = cesiumToken,
+                    onValueChange = {
+                        // Pasted tokens often arrive with a stray newline.
+                        cesiumToken = it.trim()
+                        CesiumSettings.setToken(context, cesiumToken)
+                    },
+                    label = { Text("Cesium Ion token", fontSize = 11.sp) },
+                    placeholder = { Text("eyJhbGciOi…", fontSize = 12.sp) },
+                    singleLine = true,
+                    textStyle = LocalTextStyle.current.copy(fontSize = 12.sp),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                HorizontalDivider()
                 Text(
                     text = "Telemetry rates",
                     fontSize = 13.sp,

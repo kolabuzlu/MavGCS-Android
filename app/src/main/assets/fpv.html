@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<script src="cesium/Cesium.js"></script>
+<link rel="stylesheet" href="cesium/Widgets/widgets.css" />
+<style>
+  html, body { height:100%; margin:0; padding:0; background:#0b1016; overflow:hidden; }
+  #view { position:fixed; inset:0; }
+  #message { position:absolute; inset:0; display:none; align-items:center;
+             justify-content:center; text-align:center; padding:0 28px;
+             font-family:sans-serif; color:#9fb0be; font-size:13px; line-height:1.6; }
+  /* Cesium's own chrome has no place in a cockpit view. Its credit line stays:
+     showing attribution is a condition of using the data. */
+  .cesium-viewer-toolbar, .cesium-viewer-animationContainer,
+  .cesium-viewer-timelineContainer, .cesium-viewer-fullscreenContainer {
+      display:none !important;
+  }
+  /* The credit line stays — showing attribution is a condition of using the
+     data — but at its default size it sprawls across the bottom of the HUD and
+     collides with the throttle column and the EKF flags. Sized down and boxed
+     into the gap between the two instead: left of it is the throttle, right of
+     it the flags, and this is the strip nothing else occupies. */
+  /* The credit line stays — showing attribution is a condition of using the
+     data — but at its own size and position it sprawls along the bottom of the
+     HUD, under the throttle column at one end and the EKF and VIBE flags at
+     the other. Boxed into the clear strip between the two instead.
+
+     The positioned element is .cesium-viewer-bottom, and Cesium resets its
+     left and right on every resize; !important in a stylesheet outranks the
+     inline styles it writes, where setting them from script does not. */
+  .cesium-viewer-bottom {
+      left:0 !important; right:0 !important; bottom:0 !important;
+      opacity:0.6;
+      pointer-events:none;
+  }
+  /* The attribution is split across the two clear strips the instruments
+     leave: the logo between the throttle column and the EKF flag, the links
+     between the VIBE flag and the FPV switch. Both are pinned to the viewport
+     rather than laid out in a row, because the flags sit between them and a
+     single row would run underneath. */
+  .cesium-credit-logoContainer {
+      position:fixed !important;
+      left:62px !important; bottom:3px !important;
+      max-width:118px; overflow:hidden;
+  }
+  .cesium-widget-credits {
+      position:fixed !important;
+      left:calc(50% + 64px) !important; right:112px !important; bottom:3px !important;
+      font-size:8px !important;
+      line-height:11px !important;
+      display:flex !important;
+      align-items:center;
+      gap:4px;
+      overflow:hidden;
+      white-space:nowrap;
+  }
+  /* The logo ships at a size meant for a full browser window. */
+  .cesium-credit-logoContainer img { height:11px !important; width:auto !important; }
+  .cesium-widget-credits a { text-decoration:none; color:#cfd8e0; }
+</style>
+</head>
+<body>
+<div id="view"></div>
+<div id="message"></div>
+<script>
+var viewer = null;
+var started = false;
+/** Never sit the eye exactly on the ground: at zero you see nothing at all. */
+var MIN_EYE_M = 1.5;
+
+function say(html) {
+  var m = document.getElementById('message');
+  m.style.display = 'flex';
+  m.innerHTML = html;
+}
+
+/**
+ * Bring the scene up.
+ *
+ * Deliberately not done at load: without a token there is nothing to show, and
+ * building a viewer only to tear it down costs a GL context for nothing.
+ */
+function start(token) {
+  if (started) { return; }
+  if (typeof Cesium === 'undefined') {
+    say('The 3D engine did not load.');
+    return;
+  }
+  try {
+    Cesium.Ion.defaultAccessToken = token;
+    viewer = new Cesium.Viewer('view', {
+      terrain: Cesium.Terrain.fromWorldTerrain(),
+      // Measured on the tablet: the desktop's 4x MSAA costs more than half the
+      // frame rate here (24fps against 60) for a difference you have to look
+      // for. A moving view wants the frames.
+      msaaSamples: 1,
+      contextOptions: { webgl: { antialias: false } },
+      animation: false, timeline: false, baseLayerPicker: false,
+      geocoder: false, homeButton: false, sceneModePicker: false,
+      navigationHelpButton: false, fullscreenButton: false,
+      infoBox: false, selectionIndicator: false,
+    });
+    // The camera is flown by the aircraft, not by fingers: a stray drag that
+    // moved it would be lying about where the aeroplane is pointing.
+    viewer.scene.screenSpaceCameraController.enableInputs = false;
+    viewer.scene.globe.depthTestAgainstTerrain = true;
+    // Rendering below the panel's own resolution is the single biggest lever
+    // on a screen this dense, and at speed it is not what you notice.
+    viewer.resolutionScale = 0.7;
+    viewer.scene.postProcessStages.fxaa.enabled = false;
+    viewer.scene.fog.enabled = false;
+    viewer.scene.globe.showGroundAtmosphere = false;
+    document.getElementById('message').style.display = 'none';
+    started = true;
+  } catch (e) {
+    say('The 3D view could not start.<br>' + e);
+  }
+}
+
+function needToken() {
+  say('<b style="color:#fff">Cesium Ion token needed</b><br>' +
+      'The 3D view streams terrain and imagery from Cesium Ion.<br>' +
+      'Create a free account at cesium.com/ion, then paste your access ' +
+      'token into Settings.');
+}
+
+/**
+ * Put the camera where the aeroplane is, pointing where it points.
+ *
+ * Straight from ATTITUDE: Cesium takes heading, pitch and roll natively, so
+ * there is no conversion to get wrong.
+ */
+/**
+ * The height to hand Cesium, in Cesium's own datum.
+ *
+ * The obvious value, the vehicle's altitude AMSL, is the wrong one: Cesium
+ * measures height from the WGS84 ellipsoid and MAVLink reports it from mean
+ * sea level, and the two differ by the geoid separation — tens of metres, and
+ * a different number everywhere. Fed in straight it buries the camera that far
+ * underground, which is exactly what it did here: parked at 350m over terrain
+ * Cesium put at 567m, the view was the inside of a hill.
+ *
+ * Measuring up from Cesium's own terrain keeps both numbers in one datum and
+ * is right anywhere, with no geoid model to ship.
+ */
+function cameraHeight(altMsl, agl, lat, lon) {
+  var ground;
+  try {
+    ground = viewer.scene.globe.getHeight(Cesium.Cartographic.fromDegrees(lon, lat));
+  } catch (e) {
+    ground = undefined;
+  }
+  if (typeof ground === 'number' && isFinite(ground)) {
+    return ground + Math.max(agl, MIN_EYE_M);
+  }
+  // This spot has not streamed in yet. AMSL is off by the geoid separation,
+  // but it is the only height there is until it does.
+  return altMsl;
+}
+
+function setPose(lat, lon, alt, agl, yaw, pitch, roll) {
+  if (!started || !viewer) { return; }
+  viewer.camera.setView({
+    destination: Cesium.Cartesian3.fromDegrees(lon, lat, cameraHeight(alt, agl, lat, lon)),
+    orientation: {
+      heading: Cesium.Math.toRadians(yaw),
+      pitch: Cesium.Math.toRadians(pitch),
+      roll: Cesium.Math.toRadians(roll),
+    },
+  });
+}
+</script>
+</body>
+</html>

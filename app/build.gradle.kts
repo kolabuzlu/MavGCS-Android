@@ -93,6 +93,9 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("io.dronefleet.mavlink:mavlink:1.1.11")
     implementation("org.osmdroid:osmdroid-android:6.1.20")
+    // Serves the bundled Cesium build from a real origin, so the page is
+    // subject to ordinary CORS rather than needing the filesystem opened up.
+    implementation("androidx.webkit:webkit:1.12.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
 }
