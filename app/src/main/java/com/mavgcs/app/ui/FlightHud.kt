@@ -19,6 +19,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextMeasurer
@@ -45,6 +46,9 @@ private const val PITCH_HALF_RANGE_DEG = 35f
 
 /** Height of the heading strip. The battery block is placed clear of it. */
 private val HeadingStripHeight = 18.dp
+
+/** Width of each vertical tape. The heading strip runs between the two. */
+private val TapeWidth = 40.dp
 
 /** Degrees of heading visible across the width of the heading strip. */
 private const val HEADING_SPAN_DEG = 90f
@@ -215,7 +219,7 @@ private fun DrawScope.drawVerticalTape(
     onLeft: Boolean,
     measurer: TextMeasurer,
 ) {
-    val width = 40.dp.toPx()
+    val width = TapeWidth.toPx()
     val left = if (onLeft) 0f else size.width - width
     val centerY = size.height / 2f
     drawRect(TapeBackground, topLeft = Offset(left, 0f), size = Size(width, size.height))
@@ -269,41 +273,53 @@ private fun DrawScope.drawVerticalTape(
 
 private fun DrawScope.drawHeadingStrip(headingDeg: Float, measurer: TextMeasurer) {
     val height = HeadingStripHeight.toPx()
-    drawRect(TapeBackground, topLeft = Offset(0f, 0f), size = Size(size.width, height))
+    // The strip runs between the tapes rather than over them, so the span it
+    // covers is the width left in the middle, not the whole HUD.
+    val left = TapeWidth.toPx()
+    val right = size.width - TapeWidth.toPx()
+    val spanWidth = right - left
+    if (spanWidth <= 0f) {
+        return
+    }
+    drawRect(TapeBackground, topLeft = Offset(left, 0f), size = Size(spanWidth, height))
 
-    val pxPerDeg = size.width / HEADING_SPAN_DEG
-    val centerX = size.width / 2f
+    val pxPerDeg = spanWidth / HEADING_SPAN_DEG
+    val centerX = left + spanWidth / 2f
     val half = HEADING_SPAN_DEG / 2f
-    var deg = floor((headingDeg - half) / 10f) * 10f
-    while (deg <= headingDeg + half) {
-        val x = centerX + (deg - headingDeg) * pxPerDeg
-        drawLine(
-            color = HudTextColor.copy(alpha = 0.75f),
-            start = Offset(x, height - 5.dp.toPx()),
-            end = Offset(x, height),
-            strokeWidth = 1.5f,
-        )
-        // Labelled every 30 degrees as a compass reads: N, 030, 060, E and so on.
-        // Ticks stay every 10 so the scale keeps its resolution.
-        if (((deg % 30f) + 30f) % 30f < 0.01f) {
-            val normalized = (((deg % 360f) + 360f) % 360f).roundToInt() % 360
-            val label = when (normalized) {
-                0 -> "N"
-                90 -> "E"
-                180 -> "S"
-                270 -> "W"
-                else -> normalized.toString().padStart(3, '0')
+    // Clipped so a label at the edge slides off under the tape rather than
+    // being drawn across it.
+    clipRect(left = left, top = 0f, right = right, bottom = height) {
+        var deg = floor((headingDeg - half) / 10f) * 10f
+        while (deg <= headingDeg + half) {
+            val x = centerX + (deg - headingDeg) * pxPerDeg
+            drawLine(
+                color = HudTextColor.copy(alpha = 0.75f),
+                start = Offset(x, height - 5.dp.toPx()),
+                end = Offset(x, height),
+                strokeWidth = 1.5f,
+            )
+            // Labelled every 30 degrees as a compass reads: N, 030, 060, E and so on.
+            // Ticks stay every 10 so the scale keeps its resolution.
+            if (((deg % 30f) + 30f) % 30f < 0.01f) {
+                val normalized = (((deg % 360f) + 360f) % 360f).roundToInt() % 360
+                val label = when (normalized) {
+                    0 -> "N"
+                    90 -> "E"
+                    180 -> "S"
+                    270 -> "W"
+                    else -> normalized.toString().padStart(3, '0')
+                }
+                val text = measurer.measure(
+                    AnnotatedString(label),
+                    hudLabelStyle,
+                )
+                drawText(
+                    textLayoutResult = text,
+                    topLeft = Offset(x - text.size.width / 2f, 1f),
+                )
             }
-            val text = measurer.measure(
-                AnnotatedString(label),
-                hudLabelStyle,
-            )
-            drawText(
-                textLayoutResult = text,
-                topLeft = Offset(x - text.size.width / 2f, 1f),
-            )
+            deg += 10f
         }
-        deg += 10f
     }
 
     // Fixed pointer at the centre of the strip.

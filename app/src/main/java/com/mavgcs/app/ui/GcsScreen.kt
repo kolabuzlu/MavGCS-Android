@@ -903,6 +903,9 @@ private fun ModeButton(
     }
 }
 
+/** Opening zoom, set in one place so the factory and the first fix agree. */
+private const val DEFAULT_ZOOM = 16.0
+
 /** Seconds of flight the predictive lines reach ahead of the aircraft. */
 private const val GUIDE_HORIZON_SECONDS = 10.0
 private const val GUIDE_MIN_METRES = 60.0
@@ -1073,7 +1076,7 @@ private fun VehicleMap(
             MapView(context).apply {
                 setTileSource(EsriWorldImagery)
                 setMultiTouchControls(true)
-                controller.setZoom(18.0)
+                controller.setZoom(DEFAULT_ZOOM)
                 controller.setCenter(GeoPoint(37.3349, -122.0090))
                 overlays.add(
                     MapEventsOverlay(
@@ -1167,7 +1170,7 @@ private fun VehicleMap(
                     rotation = -(vehicle.headingDeg ?: vehicle.yawDeg)
                 }
                 if (firstFix) {
-                    map.controller.setZoom(18.0)
+                    map.controller.setZoom(DEFAULT_ZOOM)
                 }
                 // Recentre only while following, so panning by hand is not
                 // fought by the next telemetry update a moment later.
