@@ -42,6 +42,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -175,6 +176,7 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
     val scheme = MaterialTheme.colorScheme
     var flyTarget by remember { mutableStateOf<GeoPoint?>(null) }
     var showFlyDialog by remember { mutableStateOf(false) }
+    var showFlyToLatLon by remember { mutableStateOf(false) }
     var followUav by remember { mutableStateOf(true) }
     var hybridMap by remember { mutableStateOf(false) }
     var showGuides by remember { mutableStateOf(true) }
@@ -255,6 +257,7 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                     currentMode = vehicle.mode,
                     metrics = metrics,
                     onSelect = viewModel::setFlightMode,
+                    onFlyToLatLon = { showFlyToLatLon = true },
                 )
 
                 GuidedControlPanel(
@@ -352,6 +355,17 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                 }
             }
         }
+    }
+
+    if (showFlyToLatLon) {
+        FlyToLatLonDialog(
+            vehicle = vehicle,
+            onDismiss = { showFlyToLatLon = false },
+            onConfirm = { lat, lon, altitude ->
+                showFlyToLatLon = false
+                viewModel.flyTo(lat, lon, altitude)
+            },
+        )
     }
 
     val target = flyTarget
@@ -855,7 +869,9 @@ private fun FlightModePanel(
     currentMode: String,
     metrics: LayoutMetrics,
     onSelect: (PlaneModeButton) -> Unit,
+    onFlyToLatLon: () -> Unit,
 ) {
+    val scheme = MaterialTheme.colorScheme
     GroupBox(
         title = "Flight Mode",
         modifier = Modifier.fillMaxWidth(),
@@ -870,6 +886,9 @@ private fun FlightModePanel(
                         enabled = enabled,
                         height = metrics.controlHeight,
                         modifier = Modifier.weight(1f),
+                        // RTL is the get-home-now action, so it carries the
+                        // warning colour until it is the mode actually engaged.
+                        alert = mode.label == "RTL",
                         onClick = { onSelect(mode) },
                     )
                 }
@@ -884,9 +903,106 @@ private fun FlightModePanel(
                 modifier = Modifier.weight(1f),
                 onClick = { onSelect(FlightModes.planeGuidedMode) },
             )
-            Spacer(Modifier.weight(2f))
+            // Two units wide, filling the space the row would otherwise leave.
+            Button(
+                onClick = onFlyToLatLon,
+                enabled = enabled,
+                modifier = Modifier
+                    .weight(2f)
+                    .height(metrics.controlHeight),
+                shape = RoundedCornerShape(6.dp),
+                contentPadding = PaddingValues(horizontal = 4.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = FlyToBlue,
+                    contentColor = Color.White,
+                    disabledContainerColor = scheme.surfaceVariant.copy(alpha = 0.4f),
+                    disabledContentColor = scheme.onSurfaceVariant.copy(alpha = 0.5f),
+                ),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Public,
+                    contentDescription = null,
+                    modifier = Modifier.size(15.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = "FLY TO LAT / LON",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                )
+            }
         }
     }
+}
+
+private val FlyToBlue = Color(0xFF1E6FD9)
+
+/**
+ * Flies to typed coordinates. The fields start from where the aircraft is, so
+ * the usual edit is a small one, and the ranges are checked before the command
+ * can be sent: a mistyped latitude would otherwise be a valid point somewhere
+ * far away rather than an obvious error.
+ */
+@Composable
+private fun FlyToLatLonDialog(
+    vehicle: VehicleState,
+    onDismiss: () -> Unit,
+    onConfirm: (Double, Double, Float) -> Unit,
+) {
+    var latText by remember { mutableStateOf(vehicle.lat?.let { "%.6f".format(it) } ?: "") }
+    var lonText by remember { mutableStateOf(vehicle.lon?.let { "%.6f".format(it) } ?: "") }
+    var altText by remember {
+        mutableStateOf(vehicle.altRelM?.takeIf { it > 1f }?.let { "%.0f".format(it) } ?: "100")
+    }
+    val lat = latText.toDoubleOrNull()
+    val lon = lonText.toDoubleOrNull()
+    val altitude = altText.toFloatOrNull()
+    val valid = lat != null && lat in -90.0..90.0 &&
+        lon != null && lon in -180.0..180.0 &&
+        altitude != null && altitude > 0f
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Fly to lat / lon") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                CoordinateField("Latitude", latText) { latText = it }
+                CoordinateField("Longitude", lonText) { lonText = it }
+                CoordinateField("Altitude above home (m)", altText) { altText = it }
+                Text(
+                    text = "Switches the vehicle to GUIDED and flies to this point.",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(lat!!, lon!!, altitude!!) },
+                enabled = valid,
+            ) {
+                Text("Fly")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
+}
+
+@Composable
+private fun CoordinateField(label: String, value: String, onChange: (String) -> Unit) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = { entered ->
+            onChange(entered.filter { it.isDigit() || it == '.' || it == '-' }.take(12))
+        },
+        label = { Text(label) },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+    )
 }
 
 @Composable
@@ -971,6 +1087,7 @@ private fun ModeButton(
     height: Dp,
     modifier: Modifier = Modifier,
     maxLines: Int = 1,
+    alert: Boolean = false,
     onClick: () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -980,12 +1097,20 @@ private fun ModeButton(
         modifier = modifier.height(height),
         shape = RoundedCornerShape(6.dp),
         contentPadding = PaddingValues(horizontal = 2.dp),
-        border = if (active) null else BorderStroke(1.dp, scheme.outline),
+        border = if (active || alert) null else BorderStroke(1.dp, scheme.outline),
         colors = ButtonDefaults.buttonColors(
-            // Green marks the engaged mode. Red is kept for the link being down
-            // and for a failed command, so it never doubles as "this is current".
-            containerColor = if (active) scheme.primary else scheme.surfaceVariant,
-            contentColor = if (active) scheme.onPrimary else scheme.onSurface,
+            // Green always means the engaged mode, so an alert button turns green
+            // like any other once it is the one flying.
+            containerColor = when {
+                active -> scheme.primary
+                alert -> scheme.error
+                else -> scheme.surfaceVariant
+            },
+            contentColor = when {
+                active -> scheme.onPrimary
+                alert -> Color.White
+                else -> scheme.onSurface
+            },
             disabledContainerColor = scheme.surfaceVariant.copy(alpha = 0.4f),
             disabledContentColor = scheme.onSurfaceVariant.copy(alpha = 0.5f),
         ),
