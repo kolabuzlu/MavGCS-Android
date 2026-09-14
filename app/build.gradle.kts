@@ -26,8 +26,10 @@ android {
         applicationId = "com.mavgcs.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        // The code has to climb for Android to see an update at all; the name
+        // is what people read.
+        versionCode = 2
+        versionName = "1.0.1"
         vectorDrawables.useSupportLibrary = true
     }
 
