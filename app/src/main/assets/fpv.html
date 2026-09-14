@@ -8,9 +8,19 @@
 <style>
   html, body { height:100%; margin:0; padding:0; background:#0b1016; overflow:hidden; }
   #view { position:fixed; inset:0; }
-  #message { position:absolute; inset:0; display:none; align-items:center;
-             justify-content:center; text-align:center; padding:0 28px;
-             font-family:sans-serif; color:#9fb0be; font-size:13px; line-height:1.6; }
+  /* Boxed into the middle of the panel rather than spread across all of it:
+     at full width and 13px this ran under the wind readout, the battery block
+     and the heading tape, which is the first thing a new reader sees. */
+  #message {
+      /* Fixed, not absolute: body's height collapses to zero in this WebView,
+         so percentages against it put the box at the top with no height at
+         all. The viewport is the one box here with real dimensions. */
+      position:fixed; left:18%; right:18%; top:28%; bottom:20%;
+      display:none; align-items:center; justify-content:center;
+      text-align:center; font-family:sans-serif;
+      color:#c8d4de; font-size:9px; line-height:1.55;
+      background:rgba(8,12,18,0.85); border-radius:6px; padding:10px 14px;
+  }
   /* Cesium's own chrome has no place in a cockpit view. Its credit line stays:
      showing attribution is a condition of using the data. */
   .cesium-viewer-toolbar, .cesium-viewer-animationContainer,
@@ -92,7 +102,9 @@ var MIN_EYE_M = 1.5;
 function say(html) {
   var m = document.getElementById('message');
   m.style.display = 'flex';
-  m.innerHTML = html;
+  // One child, so the flex box centres a block of text rather than laying the
+  // heading and the body out as columns beside each other.
+  m.innerHTML = '<div>' + html + '</div>';
 }
 
 /**
@@ -139,9 +151,8 @@ function start(token) {
 
 function needToken() {
   say('<b style="color:#fff">Cesium Ion token needed</b><br>' +
-      'The 3D view streams terrain and imagery from Cesium Ion.<br>' +
-      'Create a free account at cesium.com/ion, then paste your access ' +
-      'token into Settings.');
+      'Create a free account at cesium.com/ion and paste the<br>' +
+      'access token into Settings.');
 }
 
 /**
