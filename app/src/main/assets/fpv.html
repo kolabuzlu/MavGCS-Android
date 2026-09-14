@@ -111,11 +111,12 @@ function start(token) {
     Cesium.Ion.defaultAccessToken = token;
     viewer = new Cesium.Viewer('view', {
       terrain: Cesium.Terrain.fromWorldTerrain(),
-      // Measured on the tablet: the desktop's 4x MSAA costs more than half the
-      // frame rate here (24fps against 60) for a difference you have to look
-      // for. A moving view wants the frames.
-      msaaSamples: 1,
-      contextOptions: { webgl: { antialias: false } },
+      // Measured on the tablet at 24fps against 60 without. Worth it: the
+      // camera is flown by telemetry arriving a few times a second, so frames
+      // beyond that rate buy nothing, where a staircased horizon and ridge
+      // line are visible every one of them.
+      msaaSamples: 4,
+      contextOptions: { webgl: { antialias: true } },
       animation: false, timeline: false, baseLayerPicker: false,
       geocoder: false, homeButton: false, sceneModePicker: false,
       navigationHelpButton: false, fullscreenButton: false,
@@ -125,12 +126,10 @@ function start(token) {
     // moved it would be lying about where the aeroplane is pointing.
     viewer.scene.screenSpaceCameraController.enableInputs = false;
     viewer.scene.globe.depthTestAgainstTerrain = true;
-    // Rendering below the panel's own resolution is the single biggest lever
-    // on a screen this dense, and at speed it is not what you notice.
-    viewer.resolutionScale = 0.7;
-    viewer.scene.postProcessStages.fxaa.enabled = false;
-    viewer.scene.fog.enabled = false;
-    viewer.scene.globe.showGroundAtmosphere = false;
+    // Full panel resolution, and the rest of what Cesium offers left on:
+    // FXAA over the top of the MSAA, and the fog and ground atmosphere that
+    // give distance something to read against. All of it was off while the
+    // question was whether this could run at all.
     document.getElementById('message').style.display = 'none';
     started = true;
   } catch (e) {
