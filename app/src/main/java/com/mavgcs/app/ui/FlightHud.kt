@@ -733,7 +733,9 @@ private fun saveCellCount(context: Context, cells: Int) {
 private fun CellCountSelector(cells: Int, compact: Boolean, onSelect: (Int) -> Unit) {
     Row(
         horizontalArrangement = Arrangement.spacedBy(2.dp),
-        modifier = Modifier.padding(top = if (compact) 1.dp else 3.dp),
+        // Half a dp off the top, which is the one pixel it takes to sit
+        // level with the figures beside it rather than a shade below.
+        modifier = Modifier.padding(top = if (compact) 0.5.dp else 2.5.dp),
     ) {
         CELL_COUNTS.forEach { count ->
             val chosen = count == cells
