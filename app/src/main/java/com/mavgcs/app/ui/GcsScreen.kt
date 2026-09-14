@@ -121,7 +121,6 @@ private data class LayoutMetrics(
     val armHeight: Dp,
     val controlHeight: Dp,
     val controlGap: Dp,
-    val hudHeight: Dp,
     val gridLabel: TextUnit,
     val gridValue: TextUnit,
     val gridRowGap: Dp,
@@ -144,7 +143,6 @@ private fun metricsFor(width: Dp, height: Dp): LayoutMetrics {
             armHeight = 34.dp,
             controlHeight = 30.dp,
             controlGap = 6.dp,
-            hudHeight = 112.dp,
             gridLabel = 8.sp,
             gridValue = 12.sp,
             gridRowGap = 6.dp,
@@ -158,7 +156,6 @@ private fun metricsFor(width: Dp, height: Dp): LayoutMetrics {
             armHeight = 44.dp,
             controlHeight = 38.dp,
             controlGap = 8.dp,
-            hudHeight = 158.dp,
             gridLabel = 9.sp,
             gridValue = 14.sp,
             gridRowGap = 10.dp,
@@ -262,11 +259,14 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                     metrics = metrics,
                     onSend = viewModel::sendGuided,
                 )
+                // Weighted rather than fixed: the HUD takes whatever height the
+                // column has left, so a taller tablet fills instead of leaving a
+                // gap under the data grid, and a short one still just fits.
                 FlightHud(
                     vehicle = vehicle,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(metrics.hudHeight),
+                        .weight(1f),
                 )
                 TelemetryGrid(vehicle, metrics)
             }
