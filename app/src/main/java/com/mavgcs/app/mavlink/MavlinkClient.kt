@@ -1,5 +1,6 @@
 package com.mavgcs.app.mavlink
 
+import android.util.Log
 import io.dronefleet.mavlink.MavlinkConnection
 import io.dronefleet.mavlink.MavlinkMessage
 import io.dronefleet.mavlink.ardupilotmega.Rangefinder
@@ -70,6 +71,8 @@ class MavlinkClient {
     private var heartbeat: Thread? = null
     private var datagramSocket: DatagramSocket? = null
     private var tcpSocket: Socket? = null
+    private var chunkId = 0
+    private var chunkSequence = -1
 
     /**
      * Every outbound frame goes through this one thread. It keeps socket writes
@@ -94,7 +97,7 @@ class MavlinkClient {
             } catch (_: InterruptedException) {
                 Thread.currentThread().interrupt()
             } catch (error: Exception) {
-                appendStatus("Link error: ${error.message ?: error.javaClass.simpleName}")
+                Log.w(TAG, "Link error: ${error.message ?: error.javaClass.simpleName}")
             } finally {
                 running.set(false)
                 _state.update { it.copy(linkUp = false) }
@@ -148,9 +151,9 @@ class MavlinkClient {
                     GcsCommand.GUIDED,
                     -> setMode(connection, sys, snapshot, command)
                 }
-                appendStatus("Sent ${command.name}")
+                Log.i(TAG, "Sent ${command.name}")
             } catch (error: Exception) {
-                appendStatus("Send failed: ${error.message ?: error.javaClass.simpleName}")
+                Log.w(TAG, "Send failed: ${error.message ?: error.javaClass.simpleName}")
             }
         }
     }
@@ -162,9 +165,9 @@ class MavlinkClient {
         tx.execute {
             try {
                 sendModeChange(connection, sys, comp, customMode)
-                appendStatus("Sent mode $label")
+                Log.i(TAG, "Sent mode $label")
             } catch (error: Exception) {
-                appendStatus("Mode change failed: ${error.message ?: error.javaClass.simpleName}")
+                Log.w(TAG, "Mode change failed: ${error.message ?: error.javaClass.simpleName}")
             }
         }
     }
@@ -240,9 +243,9 @@ class MavlinkClient {
         tx.execute {
             try {
                 block(connection, sys, comp)
-                appendStatus("Sent $description")
+                Log.i(TAG, "Sent $description")
             } catch (error: Exception) {
-                appendStatus("Send failed: ${error.message ?: error.javaClass.simpleName}")
+                Log.w(TAG, "Send failed: ${error.message ?: error.javaClass.simpleName}")
             }
         }
     }
@@ -264,7 +267,7 @@ class MavlinkClient {
             if (bindHost == "0.0.0.0") {
                 throw error
             }
-            appendStatus("Cannot bind $bindHost here, listening on 0.0.0.0 instead")
+            Log.w(TAG, "Cannot bind $bindHost here, listening on 0.0.0.0 instead")
             socket.bind(InetSocketAddress(InetAddress.getByName("0.0.0.0"), config.port))
         }
         datagramSocket = socket
@@ -464,7 +467,7 @@ class MavlinkClient {
             is TerrainReport -> _state.update {
                 it.copy(terrainAltM = payload.terrainHeight())
             }
-            is Statustext -> appendStatus(payload.text())
+            is Statustext -> appendVehicleMessage(payload)
         }
     }
 
@@ -510,7 +513,7 @@ class MavlinkClient {
         }
         if (first) {
             requestStreams(connection, message.originSystemId, message.originComponentId)
-            appendStatus("Vehicle ${message.originSystemId} online")
+            Log.i(TAG, "Vehicle ${message.originSystemId} online")
         }
     }
 
@@ -638,16 +641,37 @@ class MavlinkClient {
         else -> "FIX $fix"
     }
 
-    private fun appendStatus(text: String) {
-        val line = text.trim().ifBlank { return }
+    /**
+     * The vehicle's own STATUSTEXT, and nothing else. ArduPilot splits a long
+     * message across chunks sharing an id with an increasing sequence, so a
+     * continuation is joined onto the previous line rather than logged as a
+     * fragment of its own.
+     */
+    private fun appendVehicleMessage(payload: Statustext) {
+        val text = payload.text().trimEnd('\u0000', ' ')
+        if (text.isEmpty()) {
+            return
+        }
+        val id = payload.id()
+        val sequence = payload.chunkSeq()
+        val continues = id != 0 && id == chunkId && sequence == chunkSequence + 1
+        chunkId = id
+        chunkSequence = sequence
         _state.update { current ->
-            current.copy(statusLog = (current.statusLog + line).takeLast(12))
+            val lines = if (continues && current.statusLog.isNotEmpty()) {
+                current.statusLog.dropLast(1) + (current.statusLog.last() + text)
+            } else {
+                current.statusLog + text
+            }
+            current.copy(statusLog = lines.takeLast(MAX_VEHICLE_MESSAGES))
         }
     }
 
     companion object {
         const val GCS_SYSTEM_ID = 255
         const val GCS_COMPONENT_ID = 190
+        private const val TAG = "MavlinkClient"
+        private const val MAX_VEHICLE_MESSAGES = 200
         private const val MAV_MODE_FLAG_CUSTOM_MODE_ENABLED = 1
         private const val MAV_FRAME_GLOBAL_RELATIVE_ALT = 3
         private const val SPEED_TYPE_AIRSPEED = 0

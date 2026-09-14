@@ -830,22 +830,20 @@ private fun MessagesPanel(statusLog: List<String>, modifier: Modifier = Modifier
         modifier = modifier,
         titleBackground = scheme.background,
     ) {
+        val scroll = rememberScrollState()
+        // Keep the newest line in view; the vehicle can produce a burst of them
+        // during a pre-arm check, and the panel is only a few lines tall.
+        LaunchedEffect(statusLog.size) {
+            scroll.animateScrollTo(scroll.maxValue)
+        }
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
-                .verticalScroll(rememberScrollState()),
+                .verticalScroll(scroll),
         ) {
-            if (statusLog.isEmpty()) {
-                Text(
-                    text = "Waiting for STATUSTEXT…",
-                    color = scheme.onSurfaceVariant,
-                    fontSize = 12.sp,
-                )
-            } else {
-                statusLog.forEach { line ->
-                    Text(line, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-                }
+            statusLog.forEach { line ->
+                Text(line, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
             }
         }
     }
