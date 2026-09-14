@@ -12,3 +12,8 @@
 .cxx
 *.log
 .kotlin
+
+# The release signing key and the passwords that open it.
+keystore.properties
+*.jks
+*.keystore

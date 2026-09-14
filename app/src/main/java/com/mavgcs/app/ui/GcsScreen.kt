@@ -43,12 +43,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
 import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Surface
@@ -56,21 +59,35 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.res.imageResource
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
@@ -84,6 +101,10 @@ import com.mavgcs.app.mavlink.GcsCommand
 import com.mavgcs.app.mavlink.GuidedAction
 import com.mavgcs.app.mavlink.LinkType
 import com.mavgcs.app.mavlink.PlaneModeButton
+import com.mavgcs.app.cache.MapTileCache
+import com.mavgcs.app.mavlink.MissionWaypoint
+import com.mavgcs.app.mavlink.TelemetrySettings
+import com.mavgcs.app.mavlink.UdpMode
 import com.mavgcs.app.mavlink.VehicleState
 import com.mavgcs.app.weather.RadarFrame
 import com.mavgcs.app.weather.RadarTile
@@ -92,9 +113,11 @@ import kotlin.math.asin
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
+import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlinx.coroutines.delay
 import org.osmdroid.tileprovider.MapTileProviderBasic
+import org.osmdroid.tileprovider.tilesource.ITileSource
 import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
 import org.osmdroid.events.MapEventsReceiver
 import org.osmdroid.util.GeoPoint
@@ -106,6 +129,7 @@ import org.osmdroid.views.overlay.Overlay
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polyline
 import org.osmdroid.views.overlay.TilesOverlay
+import java.util.Locale
 
 /**
  * The left column has to fit without scrolling, and tablets differ a lot in
@@ -114,6 +138,8 @@ import org.osmdroid.views.overlay.TilesOverlay
  * come from the height actually available instead of being fixed.
  */
 private data class LayoutMetrics(
+    /** Short screen: everything on it has to earn its height. */
+    val compact: Boolean,
     val columnWidth: Dp,
     val outerPadding: Dp,
     val gap: Dp,
@@ -136,6 +162,7 @@ private fun metricsFor(width: Dp, height: Dp): LayoutMetrics {
     }
     return if (height < 700.dp) {
         LayoutMetrics(
+            compact = true,
             columnWidth = columnWidth,
             outerPadding = 8.dp,
             gap = 6.dp,
@@ -149,6 +176,7 @@ private fun metricsFor(width: Dp, height: Dp): LayoutMetrics {
         )
     } else {
         LayoutMetrics(
+            compact = false,
             columnWidth = columnWidth,
             outerPadding = 12.dp,
             gap = 12.dp,
@@ -169,8 +197,29 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
     val form by viewModel.form.collectAsStateWithLifecycle()
     val scheme = MaterialTheme.colorScheme
     var flyTarget by remember { mutableStateOf<GeoPoint?>(null) }
+    // The marker outlives the prompt: once the command has gone, the bar has
+    // done its job, but the point the aircraft is heading for is worth keeping
+    // on the map.
+    var awaitingFly by remember { mutableStateOf(false) }
     var showFlyDialog by remember { mutableStateOf(false) }
     var showFlyToLatLon by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(false) }
+    // Points the pilot has clicked but not yet sent, and the batch that was
+    // sent last -- kept apart so Update knows what is actually on the vehicle.
+    var queueWaypoints by remember { mutableStateOf(false) }
+    val waypointQueue = remember { mutableStateListOf<QueuedWaypoint>() }
+    var sentMission by remember { mutableStateOf<List<QueuedWaypoint>>(emptyList()) }
+    var editingWaypoint by remember { mutableStateOf<Int?>(null) }
+    var missionAltitude by remember { mutableStateOf(DEFAULT_MISSION_ALTITUDE_M) }
+    var showMissionAltitude by remember { mutableStateOf(false) }
+    // Only the vehicle's acknowledgement settles what it is actually holding.
+    LaunchedEffect(vehicle.missionAccepted) {
+        if (vehicle.missionAccepted > 0) {
+            sentMission = sentMission.map {
+                it.copy(sentAltitudeM = it.effectiveAltitude(missionAltitude))
+            }
+        }
+    }
     var followUav by remember { mutableStateOf(true) }
     var hybridMap by remember { mutableStateOf(false) }
     var showGuides by remember { mutableStateOf(true) }
@@ -221,8 +270,15 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
             eastLon = lon + lonSpan,
         )
     }
+    // Named apart from 'context', which Kotlin now treats as a soft keyword
+    // in a position like this.
+    val appContext = LocalContext.current
     val configuration = LocalConfiguration.current
     val metrics = metricsFor(configuration.screenWidthDp.dp, configuration.screenHeightDp.dp)
+    // The compass and the radar share this. A short screen cannot carry two
+    // 200dp dials above the credit line, so both come down together rather
+    // than one of them being dropped.
+    val instrumentSize = if (metrics.compact) 150.dp else 200.dp
 
     Surface(modifier = Modifier.fillMaxSize(), color = scheme.background) {
         Row(
@@ -280,18 +336,34 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    MessagesPanel(
-                        statusLog = vehicle.statusLog,
+                    Column(
                         modifier = Modifier
                             .weight(1f)
                             .height(TopPanelHeight),
-                    )
+                        verticalArrangement = Arrangement.spacedBy(metrics.controlGap),
+                    ) {
+                        MessagesPanel(
+                            statusLog = vehicle.statusLog,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f),
+                        )
+                        SystemsPanel(
+                            vehicle = vehicle,
+                                                fontSize = if (metrics.compact) 9.sp else 10.sp,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
                     ConnectionPanel(
                         form = form,
                         onType = viewModel::setType,
                         onHost = viewModel::setHost,
+                        onUdpMode = viewModel::setUdpMode,
                         onPort = viewModel::setPort,
-                        onToggle = viewModel::toggleConnection,
+                        onToggle = {
+                            viewModel.toggleConnection(TelemetrySettings.current(appContext))
+                        },
+                        onSettings = { showSettings = true },
                         modifier = Modifier
                             .width(340.dp)
                             .height(TopPanelHeight),
@@ -311,12 +383,33 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                         hybrid = hybridMap,
                         showGuides = showGuides,
                         clearTrailToken = clearTrailToken,
+                        missionPoints = waypointQueue + sentMission,
+                        queuedCount = waypointQueue.size,
+                        missionAltitudeM = missionAltitude,
+                        // Only a point the aircraft actually holds can be the
+                        // one it is flying to, and its item 1 is our first.
+                        activeWaypoint = vehicle.currentWaypointSeq
+                            ?.minus(1)
+                            ?.takeIf { it in sentMission.indices }
+                            ?.plus(waypointQueue.size),
+                        onWaypointTap = { editingWaypoint = it },
                         radarTiles = radarTiles,
-                        onMapTap = { flyTarget = it },
+                        onMapTap = { point ->
+                            if (queueWaypoints) {
+                                waypointQueue.add(QueuedWaypoint(point))
+                            } else {
+                                flyTarget = point
+                                awaitingFly = true
+                            }
+                        },
                     )
+                    // One row across the top of the map. Hybrid is pushed to
+                    // the far edge: it picks the imagery, where the rest act on
+                    // what is drawn over it.
                     Row(
                         modifier = Modifier
                             .align(Alignment.TopStart)
+                            .fillMaxWidth()
                             .padding(8.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
@@ -324,34 +417,143 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                         MapToggle("Vectors", showGuides) { showGuides = !showGuides }
                         MapButton("Clear Trail") { clearTrailToken++ }
                         MapToggle("Weather", showWeather) { showWeather = !showWeather }
+                        MissionControls(
+                            queueing = queueWaypoints,
+                            queued = waypointQueue.size,
+                            hasSentMission = sentMission.isNotEmpty(),
+                            onToggleQueue = { queueWaypoints = !queueWaypoints },
+                            onStart = { showMissionAltitude = true },
+                            onUpdate = {
+                                viewModel.uploadMission(
+                                    waypoints = sentMission.map {
+                                        MissionWaypoint(
+                                            it.point.latitude,
+                                            it.point.longitude,
+                                            it.altitudeM,
+                                        )
+                                    },
+                                    altitudeM = missionAltitude,
+                                    restart = false,
+                                )
+                            },
+                            onClear = {
+                                waypointQueue.clear()
+                                sentMission = emptyList()
+                            },
+                            onClearVehicle = {
+                                waypointQueue.clear()
+                                sentMission = emptyList()
+                                viewModel.clearMission()
+                            },
+                        )
+                        Spacer(Modifier.weight(1f))
                         MapToggle("Hybrid", hybridMap) { hybridMap = !hybridMap }
                     }
-                    MapCoordinates(
-                        lat = vehicle.lat,
-                        lon = vehicle.lon,
-                        modifier = Modifier.align(Alignment.BottomStart),
-                    )
-                    flyTarget?.let { target ->
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        EtaReadout(vehicle = vehicle)
+                        MapCoordinates(lat = vehicle.lat, lon = vehicle.lon)
+                        MapCredit()
+                    }
+                    flyTarget?.takeIf { awaitingFly }?.let { target ->
                         FlyHereBar(
                             target = target,
                             enabled = vehicle.linkUp,
                             onFly = { showFlyDialog = true },
-                            onClear = { flyTarget = null },
+                            onClear = {
+                                flyTarget = null
+                                awaitingFly = false
+                            },
                             modifier = Modifier.align(Alignment.BottomCenter),
                         )
                     }
-                    Text(
-                        text = "Esri, Maxar, Earthstar Geographics",
-                        fontSize = 9.sp,
-                        color = Color.White.copy(alpha = 0.8f),
+                    // Compass over radar over the credit line, one gutter
+                    // between each, so the corner reads as a single stack of
+                    // instruments rather than three things that happen to be
+                    // near each other. On a short screen they shrink together:
+                    // two full-size dials would not fit above the attribution.
+                    Column(
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
-                            .background(Color.Black.copy(alpha = 0.45f))
-                            .padding(horizontal = 6.dp, vertical = 2.dp),
-                    )
+                            .padding(8.dp),
+                        horizontalAlignment = Alignment.End,
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        CompassRose(vehicle = vehicle, size = instrumentSize)
+                        TerrainRadar(vehicle = vehicle, size = instrumentSize)
+                        Text(
+                            text = "Esri, Maxar, Earthstar Geographics",
+                            fontSize = 9.sp,
+                            color = Color.White.copy(alpha = 0.8f),
+                            modifier = Modifier
+                                .background(Color.Black.copy(alpha = 0.45f))
+                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                    }
                 }
             }
         }
+    }
+
+    if (showMissionAltitude) {
+        MissionAltitudeDialog(
+            waypoints = waypointQueue.size,
+            altitudeM = missionAltitude,
+            onDismiss = { showMissionAltitude = false },
+            onStart = { altitude ->
+                showMissionAltitude = false
+                missionAltitude = altitude
+                viewModel.uploadMission(
+                    waypoints = waypointQueue.map {
+                        MissionWaypoint(it.point.latitude, it.point.longitude, it.altitudeM)
+                    },
+                    altitudeM = altitude,
+                )
+                // The markers stay up as a record of what was sent; only Clear
+                // takes them away. Starting a mission also supersedes any
+                // pending single-point target.
+                sentMission = waypointQueue.toList()
+                waypointQueue.clear()
+                flyTarget = null
+                awaitingFly = false
+            },
+        )
+    }
+
+    editingWaypoint?.let { index ->
+        val queued = waypointQueue.size
+        val waypoint = waypointQueue.getOrNull(index)
+            ?: sentMission.getOrNull(index - queued)
+        if (waypoint == null) {
+            editingWaypoint = null
+        } else {
+            WaypointAltitudeDialog(
+                number = index + 1,
+                altitudeM = waypoint.altitudeM ?: missionAltitude,
+                onDismiss = { editingWaypoint = null },
+                onApply = { altitude ->
+                    editingWaypoint = null
+                    if (index < queued) {
+                        waypointQueue[index] = waypoint.copy(altitudeM = altitude)
+                    } else {
+                        sentMission = sentMission.toMutableList().also {
+                            it[index - queued] = waypoint.copy(altitudeM = altitude)
+                        }
+                    }
+                },
+            )
+        }
+    }
+
+    if (showSettings) {
+        SettingsDialog(
+            onDismiss = { showSettings = false },
+            onRatesChanged = viewModel::applyStreamRates,
+        )
     }
 
     if (showFlyToLatLon) {
@@ -360,6 +562,8 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
             onDismiss = { showFlyToLatLon = false },
             onConfirm = { lat, lon, altitude ->
                 showFlyToLatLon = false
+                flyTarget = GeoPoint(lat, lon)
+                awaitingFly = false
                 viewModel.flyTo(lat, lon, altitude)
             },
         )
@@ -373,6 +577,7 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
             onDismiss = { showFlyDialog = false },
             onConfirm = { altitude ->
                 showFlyDialog = false
+                awaitingFly = false
                 viewModel.flyTo(target.latitude, target.longitude, altitude)
             },
         )
@@ -382,16 +587,102 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
 @Composable
 private fun MapCoordinates(lat: Double?, lon: Double?, modifier: Modifier = Modifier) {
     Row(
+        // Same ground and corner as the ETA and credit boxes it stacks with,
+        // so the three read as one corner rather than three separate labels.
         modifier = modifier
-            .padding(10.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f))
-            .padding(horizontal = 10.dp, vertical = 6.dp),
+            .clip(RoundedCornerShape(4.dp))
+            .background(Color.Black.copy(alpha = 0.6f))
+            .padding(horizontal = 10.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         MapCoordinate("LAT", lat)
         MapCoordinate("LON", lon)
     }
+}
+
+/** Modes that fly the aircraft to a place, and so have an arrival to time. */
+private val EtaNavModes = setOf("AUTO", "GUIDED", "RTL", "AUTOLAND", "QRTL")
+
+private const val ETA_MIN_GS_MPS = 1.0f
+private const val ETA_MIN_DIST_M = 1.0f
+private const val ETA_MAX_SECONDS = 100f * 3600f
+
+/**
+ * Time to the waypoint, from distance and ground speed.
+ *
+ * Blank rather than approximate where the arithmetic runs away: standing
+ * still divides by nothing, and no waypoint reports zero distance, which
+ * would read as "arrived" if it were let through. Not navigating says so with
+ * a dash rather than vanishing, since a box that disappears looks like a
+ * fault where a dash plainly says there is no arrival to time.
+ */
+@Composable
+private fun EtaReadout(vehicle: VehicleState, modifier: Modifier = Modifier) {
+    val value = etaValue(vehicle) ?: return
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(Color.Black.copy(alpha = 0.6f))
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+    ) {
+        Text("ETA to WP : ", color = MapReadoutColor, fontSize = 11.sp, maxLines = 1)
+        Text(
+            text = value,
+            color = MapReadoutColor,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+        )
+    }
+}
+
+/** The value to show, or null when the box should not be up at all. */
+private fun etaValue(vehicle: VehicleState): String? {
+    if (!vehicle.linkUp) {
+        return null
+    }
+    if (vehicle.mode !in EtaNavModes) {
+        return "--"
+    }
+    val distance = vehicle.distToWpM ?: return null
+    val groundSpeed = vehicle.groundSpeedMs ?: return null
+    if (distance < ETA_MIN_DIST_M || groundSpeed < ETA_MIN_GS_MPS) {
+        return null
+    }
+    val seconds = distance / groundSpeed
+    if (seconds > ETA_MAX_SECONDS) {
+        return null
+    }
+    return etaClock(seconds)
+}
+
+/** m:ss under an hour, h:mm:ss over it. */
+private fun etaClock(seconds: Float): String {
+    val total = seconds.roundToInt()
+    val hours = total / 3600
+    val minutes = (total % 3600) / 60
+    val secs = total % 60
+    return if (hours > 0) {
+        "%d:%02d:%02d".format(Locale.ROOT, hours, minutes, secs)
+    } else {
+        "%d:%02d".format(Locale.ROOT, minutes, secs)
+    }
+}
+
+@Composable
+private fun MapCredit(modifier: Modifier = Modifier) {
+    Text(
+        text = "Created by Derin Hakan Karakurt",
+        // The same weight as the LAT / LON captions above it: a credit line
+        // should not read louder than the coordinates it sits under.
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        fontSize = 11.sp,
+        maxLines = 1,
+        modifier = modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(Color.Black.copy(alpha = 0.6f))
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+    )
 }
 
 @Composable
@@ -400,7 +691,7 @@ private fun MapCoordinate(label: String, value: Double?) {
     Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
         Text(label, fontSize = 11.sp, color = scheme.onSurfaceVariant)
         Text(
-            text = value?.let { "%.6f".format(it) } ?: NO_DATA,
+            text = value?.let { "%.6f".format(Locale.ROOT, it) } ?: NO_DATA,
             fontSize = 11.sp,
             fontWeight = FontWeight.SemiBold,
             fontFamily = FontFamily.Monospace,
@@ -471,7 +762,7 @@ private fun FlyHereBar(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = "%.6f, %.6f".format(target.latitude, target.longitude),
+            text = "%.6f, %.6f".format(Locale.ROOT, target.latitude, target.longitude),
             fontSize = 12.sp,
             fontFamily = FontFamily.Monospace,
             color = scheme.onSurface,
@@ -502,7 +793,7 @@ private fun FlyHereDialog(
     onConfirm: (Float) -> Unit,
 ) {
     var text by remember {
-        mutableStateOf(currentAltitude?.takeIf { it > 1f }?.let { "%.0f".format(it) } ?: "100")
+        mutableStateOf(currentAltitude?.takeIf { it > 1f }?.let { "%.0f".format(Locale.ROOT, it) } ?: "100")
     }
     val altitude = text.toFloatOrNull()
     AlertDialog(
@@ -511,7 +802,7 @@ private fun FlyHereDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    text = "%.6f, %.6f".format(target.latitude, target.longitude),
+                    text = "%.6f, %.6f".format(Locale.ROOT, target.latitude, target.longitude),
                     fontFamily = FontFamily.Monospace,
                     fontSize = 13.sp,
                 )
@@ -562,7 +853,7 @@ private fun TelemetryGrid(vehicle: VehicleState, metrics: LayoutMetrics) {
         TelemetryField("Rangefinder (m)", vehicle.rangefinderM.format(2)),
         TelemetryField("Dist to Home (m)", vehicle.distToHomeM.format(0)),
         TelemetryField("Dist to WP (m)", vehicle.distToWpM.format(0)),
-        TelemetryField("Sat Count", vehicle.satellites.takeIf { it > 0 }?.toString() ?: NO_DATA),
+        TelemetryField("Sat Count", vehicle.satellites?.takeIf { it > 0 }?.toString() ?: NO_DATA),
         TelemetryField("Roll (deg)", vehicle.rollDeg.format(1)),
         TelemetryField("Pitch (deg)", vehicle.pitchDeg.format(1)),
         TelemetryField("Yaw (deg)", vehicle.yawDeg.format(1)),
@@ -630,19 +921,36 @@ private fun ArmPad(
 ) {
     val scheme = MaterialTheme.colorScheme
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(metrics.controlGap)) {
-        // Red marks the state the vehicle is actually in, not the action the
-        // button performs, so a glance says whether the props are live.
+        // Each button lights for the state the vehicle is actually in rather
+        // than for the action it performs: green while armed, red while not, so
+        // a glance says whether the props are live.
         HoldButton(
             label = "ARM",
             holdLabel = "FORCE\u2026",
             enabled = enabled,
-            containerColor = if (armed) scheme.error else scheme.surfaceVariant,
-            contentColor = if (armed) Color.White else scheme.onSurface,
+            containerColor = if (armed) scheme.primary else scheme.surfaceVariant,
+            contentColor = if (armed) scheme.onPrimary else scheme.onSurface,
             border = if (armed) null else BorderStroke(1.dp, scheme.outline),
             height = metrics.armHeight,
             onHold = { onCommand(GcsCommand.FORCE_ARM) },
             modifier = Modifier.weight(1f),
             onTap = { onCommand(GcsCommand.ARM) },
+        )
+        // Hold-only, like DISARM: the hold is the confirmation, and there is
+        // no tap action to fire by accident. Grey rather than red -- it reports
+        // no state, it just does a job on the ground.
+        HoldButton(
+            label = "PREFLIGHT CALIBRATION",
+            holdLabel = HOLD_ELLIPSIS,
+            // Two words on two lines, so the full name fits a third of the row.
+            fontSize = if (metrics.compact) 9.sp else 10.sp,
+            enabled = enabled,
+            containerColor = scheme.surfaceVariant,
+            contentColor = scheme.onSurface,
+            border = BorderStroke(1.dp, scheme.outline),
+            height = metrics.armHeight,
+            onHold = { onCommand(GcsCommand.PREFLIGHT_CALIBRATION) },
+            modifier = Modifier.weight(1f),
         )
         HoldButton(
             label = "DISARM",
@@ -678,6 +986,7 @@ private fun HoldButton(
     height: Dp,
     onHold: () -> Unit,
     modifier: Modifier = Modifier,
+    fontSize: TextUnit = 13.sp,
     onTap: (() -> Unit)? = null,
 ) {
     val interaction = remember { MutableInteractionSource() }
@@ -730,29 +1039,34 @@ private fun HoldButton(
             }
             Text(
                 text = if (holding) holdLabel else label,
-                modifier = Modifier.align(Alignment.Center),
-                fontSize = 13.sp,
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(horizontal = 4.dp),
+                fontSize = fontSize,
                 fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center,
+                lineHeight = fontSize * 1.1f,
             )
         }
     }
 }
 
 @Composable
-private fun GroupBox(
+internal fun GroupBox(
     title: String,
     modifier: Modifier = Modifier,
-    titleBackground: Color = MaterialTheme.colorScheme.surface,
     contentGap: Dp = 8.dp,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
+    val density = LocalDensity.current
+    var label by remember { mutableStateOf(IntSize.Zero) }
     Box(modifier = modifier) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 7.dp)
-                .border(1.dp, scheme.outline, RoundedCornerShape(8.dp))
+                .padding(top = TitleLine)
+                .drawBehind { drawNotchedBorder(scheme.outline, label.width.toFloat()) }
                 .padding(start = 10.dp, end = 10.dp, top = 12.dp, bottom = 10.dp),
             verticalArrangement = Arrangement.spacedBy(contentGap),
             content = content,
@@ -762,11 +1076,124 @@ private fun GroupBox(
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold,
             color = scheme.onSurfaceVariant,
+            // The inherited line height is set for body text and would pad the
+            // box well above these 11sp caps, putting the line below the middle
+            // of the letters. Letting the font say how tall its own line is
+            // makes the box and the letters concentric.
+            style = LocalTextStyle.current.copy(lineHeight = TextUnit.Unspecified),
+            // Sitting astride the top line, which is cut away behind it. A
+            // filled backing would do the same job for the line but would also
+            // paint over whatever the panel happens to be next to.
             modifier = Modifier
-                .offset(x = 12.dp)
-                .background(titleBackground)
-                .padding(horizontal = 4.dp),
+                .offset(
+                    x = TitleInset,
+                    // Against the middle of the stroke, not the edge of the box
+                    // it is drawn inside: half a stroke of daylight between the
+                    // two is visible at this size.
+                    y = TitleLine + BorderWidth / 2 -
+                        with(density) { label.height.toDp() } / 2,
+                )
+                .onSizeChanged { label = it },
         )
+    }
+}
+
+/** Where the top line sits, measured from the top of the panel. */
+private val TitleLine = 7.dp
+
+private val BorderWidth = 1.dp
+
+/** How far along that line the title starts. */
+private val TitleInset = 12.dp
+
+/** Clear space either side of the title, so the line does not crowd it. */
+private val TitleGap = 5.dp
+
+/** The panel outline, broken where the title crosses it. */
+private fun DrawScope.drawNotchedBorder(color: Color, labelWidth: Float) {
+    val stroke = BorderWidth.toPx()
+    val half = stroke / 2
+    val outline = androidx.compose.ui.graphics.Path().apply {
+        addRoundRect(
+            RoundRect(
+                rect = androidx.compose.ui.geometry.Rect(
+                    half,
+                    half,
+                    size.width - half,
+                    size.height - half,
+                ),
+                cornerRadius = CornerRadius(8.dp.toPx()),
+            ),
+        )
+    }
+    if (labelWidth <= 0f) {
+        drawPath(outline, color, style = Stroke(stroke))
+        return
+    }
+    val notch = androidx.compose.ui.graphics.Path().apply {
+        addRect(
+            androidx.compose.ui.geometry.Rect(
+                left = TitleInset.toPx() - TitleGap.toPx(),
+                top = -stroke,
+                right = TitleInset.toPx() + labelWidth + TitleGap.toPx(),
+                bottom = stroke * 2,
+            ),
+        )
+    }
+    clipPath(notch, ClipOp.Difference) {
+        drawPath(outline, color, style = Stroke(stroke))
+    }
+}
+
+private val SegmentedHeight = 34.dp
+
+/**
+ * A row of mutually exclusive choices, sized to its labels.
+ *
+ * Chips would say the same thing, but each group of them wants a row to
+ * itself, and the connection panel has no spare height to give: whatever it
+ * takes comes off the map.
+ */
+@Composable
+private fun <T> SegmentedChoice(
+    options: List<Pair<T, String>>,
+    selected: T,
+    onSelect: (T) -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(8.dp)
+    Row(
+        modifier = Modifier
+            .height(SegmentedHeight)
+            .clip(shape)
+            .border(1.dp, scheme.outline, shape),
+    ) {
+        options.forEachIndexed { index, (value, label) ->
+            if (index > 0) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .width(1.dp)
+                        .background(scheme.outline),
+                )
+            }
+            val chosen = value == selected
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .background(if (chosen) scheme.primary else Color.Transparent)
+                    .clickable { onSelect(value) }
+                    .padding(horizontal = 10.dp),
+            ) {
+                Text(
+                    text = label,
+                    fontSize = 12.sp,
+                    fontWeight = if (chosen) FontWeight.Medium else FontWeight.Normal,
+                    color = if (chosen) scheme.onPrimary else scheme.onSurfaceVariant,
+                )
+            }
+        }
     }
 }
 
@@ -777,34 +1204,62 @@ private fun ConnectionPanel(
     onHost: (String) -> Unit,
     onPort: (String) -> Unit,
     onToggle: () -> Unit,
+    onUdpMode: (UdpMode) -> Unit,
+    onSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val scheme = MaterialTheme.colorScheme
     GroupBox(
         title = "Connection",
         modifier = modifier,
-        titleBackground = scheme.background,
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(
-                selected = form.type == LinkType.UDP,
-                onClick = { onType(LinkType.UDP) },
-                label = { Text("UDP listen", fontSize = 12.sp) },
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            SegmentedChoice(
+                options = listOf(LinkType.UDP to "UDP", LinkType.TCP to "TCP"),
+                selected = form.type,
+                onSelect = onType,
             )
-            FilterChip(
-                selected = form.type == LinkType.TCP,
-                onClick = { onType(LinkType.TCP) },
-                label = { Text("TCP", fontSize = 12.sp) },
-            )
+            // Which way round the UDP link goes. TCP has only one answer, so
+            // the question is not asked there.
+            if (form.type == LinkType.UDP) {
+                SegmentedChoice(
+                    options = listOf(
+                        UdpMode.LISTEN to "Listen",
+                        UdpMode.CONNECT to "Connect To",
+                    ),
+                    selected = form.udpMode,
+                    onSelect = onUdpMode,
+                )
+            }
+            Spacer(Modifier.weight(1f))
+            OutlinedButton(
+                onClick = onSettings,
+                modifier = Modifier.size(SegmentedHeight),
+                contentPadding = PaddingValues(0.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Settings,
+                    contentDescription = "Settings",
+                    modifier = Modifier.size(18.dp),
+                )
+            }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(
                 value = form.host,
                 onValueChange = onHost,
-                label = { Text(if (form.type == LinkType.UDP) "Bind address" else "Host", fontSize = 11.sp) },
+                label = {
+                    Text(
+                        text = if (form.hostEditable) "Host" else "Bind address",
+                        fontSize = 11.sp,
+                    )
+                },
                 singleLine = true,
                 modifier = Modifier.weight(1.6f),
-                enabled = !form.listening,
+                enabled = !form.listening && form.hostEditable,
             )
             OutlinedTextField(
                 value = form.port,
@@ -823,6 +1278,9 @@ private fun ConnectionPanel(
             contentPadding = PaddingValues(horizontal = 8.dp),
             colors = ButtonDefaults.buttonColors(
                 containerColor = if (form.listening) scheme.error else scheme.primary,
+                // White on the red. The palette's onError is dark, which reads
+                // as a disabled button rather than the live action it is.
+                contentColor = if (form.listening) Color.White else scheme.onPrimary,
             ),
         ) {
             Text(if (form.listening) "Disconnect" else "Connect", fontSize = 14.sp)
@@ -836,7 +1294,6 @@ private fun MessagesPanel(statusLog: List<String>, modifier: Modifier = Modifier
     GroupBox(
         title = "Messages",
         modifier = modifier,
-        titleBackground = scheme.background,
     ) {
         val scroll = rememberScrollState()
         // Keep the newest line in view; the vehicle can produce a burst of them
@@ -844,18 +1301,44 @@ private fun MessagesPanel(statusLog: List<String>, modifier: Modifier = Modifier
         LaunchedEffect(statusLog.size) {
             scroll.animateScrollTo(scroll.maxValue)
         }
-        Column(
+        val watermark = ImageBitmap.imageResource(R.drawable.mavgcsback)
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
-                .verticalScroll(scroll),
+                // Right-aligned and behind the log, as on the desktop. Drawn on
+                // the box rather than on the scrolling column so it stays put
+                // while messages run past it.
+                .drawBehind {
+                    val side = size.height
+                    drawImage(
+                        image = watermark,
+                        srcOffset = IntOffset.Zero,
+                        srcSize = IntSize(watermark.width, watermark.height),
+                        dstOffset = IntOffset((size.width - side).roundToInt(), 0),
+                        dstSize = IntSize(side.roundToInt(), side.roundToInt()),
+                        alpha = WATERMARK_ALPHA,
+                    )
+                },
         ) {
-            statusLog.forEach { line ->
-                Text(line, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(scroll),
+            ) {
+                statusLog.forEach { line ->
+                    Text(line, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                }
             }
         }
     }
 }
+
+/** Faint enough that a message never has to compete with it. */
+private const val WATERMARK_ALPHA = 0.55f
+
+/** Shown while a hold is in progress. */
+private const val HOLD_ELLIPSIS = "HOLD…"
 
 @Composable
 private fun FlightModePanel(
@@ -930,7 +1413,246 @@ private fun FlightModePanel(
     }
 }
 
+/**
+ * The mission controls, on one ground rather than as loose chips: they are one
+ * job -- collect points, send them, take them back -- and reading as a single
+ * panel says so, the way the desktop's boxed group does.
+ *
+ * The actions appear only while they can do something. On a map overlay a dead
+ * control is worse than an absent one, so the switch that carries the count is
+ * the only permanent part.
+ */
+@Composable
+private fun MissionControls(
+    queueing: Boolean,
+    queued: Int,
+    hasSentMission: Boolean,
+    onToggleQueue: () -> Unit,
+    onStart: () -> Unit,
+    onUpdate: () -> Unit,
+    onClear: () -> Unit,
+    onClearVehicle: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val scheme = MaterialTheme.colorScheme
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(scheme.surface.copy(alpha = 0.9f))
+            .padding(horizontal = 10.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        // Queueing takes over the map click, so it reads as a mode rather than
+        // an action, and the count lives on the switch that produced it.
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(4.dp))
+                .clickable(onClick = onToggleQueue)
+                .padding(horizontal = 2.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Icon(
+                imageVector = if (queueing) {
+                    Icons.Filled.CheckBox
+                } else {
+                    Icons.Filled.CheckBoxOutlineBlank
+                },
+                contentDescription = null,
+                tint = if (queueing) scheme.primary else scheme.onSurfaceVariant,
+                modifier = Modifier.size(16.dp),
+            )
+            Text(
+                text = if (queued == 0) "Queue WPs" else "Queue WPs ($queued)",
+                fontSize = 12.sp,
+                color = scheme.onSurface,
+            )
+        }
+        if (queued > 0) {
+            MissionAction("Start Mission", onStart)
+        }
+        if (hasSentMission) {
+            MissionAction("Update", onUpdate)
+        }
+        if (queued > 0 || hasSentMission) {
+            MissionClearAction(onClick = onClear, onHold = onClearVehicle)
+        }
+    }
+}
+
+@Composable
+private fun MissionAction(label: String, onClick: () -> Unit) {
+    Text(
+        text = label,
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Medium,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 4.dp, vertical = 4.dp),
+    )
+}
+
+/**
+ * Clicking tidies the map; holding also erases the mission the vehicle is
+ * actually storing, which is not something to be one stray tap away from.
+ */
+@Composable
+private fun MissionClearAction(onClick: () -> Unit, onHold: () -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    var holdFired by remember { mutableStateOf(false) }
+    val progress by animateFloatAsState(
+        targetValue = if (pressed) 1f else 0f,
+        animationSpec = if (pressed) {
+            tween(durationMillis = HOLD_MILLIS, easing = LinearEasing)
+        } else {
+            snap()
+        },
+        finishedListener = { value ->
+            if (value >= 1f) {
+                holdFired = true
+                onHold()
+            }
+        },
+        label = "missionClear",
+    )
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .clickable(interactionSource = interaction, indication = null) {
+                if (holdFired) {
+                    holdFired = false
+                } else {
+                    onClick()
+                }
+            },
+    ) {
+        if (progress > 0f) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .fillMaxWidth(progress)
+                    .background(scheme.error.copy(alpha = 0.35f)),
+            )
+        }
+        Text(
+            text = "Clear",
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            color = scheme.primary,
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+        )
+    }
+}
+
+/** One point of a mission the pilot has placed, with the altitude it flies at. */
+private data class QueuedWaypoint(
+    val point: GeoPoint,
+    /** Null means the point has no altitude of its own and flies the mission's. */
+    val altitudeM: Float? = null,
+    /** The altitude the vehicle actually acknowledged, once it has. */
+    val sentAltitudeM: Float? = null,
+) {
+    fun effectiveAltitude(missionAltitudeM: Float): Float = altitudeM ?: missionAltitudeM
+
+    /** Edited since it was sent, so the aircraft is still flying the old one. */
+    fun isPending(missionAltitudeM: Float): Boolean =
+        sentAltitudeM != null && effectiveAltitude(missionAltitudeM) != sentAltitudeM
+}
+
+/**
+ * The altitude of one waypoint. Editing a point that has already been sent
+ * changes only what Update would upload -- the aircraft keeps flying what it
+ * has until that is pressed.
+ */
+@Composable
+private fun WaypointAltitudeDialog(
+    number: Int,
+    altitudeM: Float,
+    onDismiss: () -> Unit,
+    onApply: (Float) -> Unit,
+) {
+    var text by remember { mutableStateOf(altitudeM.roundToInt().toString()) }
+    val entered = text.toFloatOrNull()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Waypoint $number") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                CoordinateField("Altitude above home (m)", text) { text = it }
+                Text(
+                    text = "Press Update to send the changed altitudes to the aircraft.",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { entered?.let(onApply) },
+                enabled = entered != null && entered > 0f,
+            ) {
+                Text("Set")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/** What a mission flies at until the pilot says otherwise. */
+private const val DEFAULT_MISSION_ALTITUDE_M = 150f
+
+/**
+ * The one altitude the whole mission flies at. Asked for at the point of
+ * sending rather than per waypoint, which is what the desktop does too.
+ */
+@Composable
+private fun MissionAltitudeDialog(
+    waypoints: Int,
+    altitudeM: Float,
+    onDismiss: () -> Unit,
+    onStart: (Float) -> Unit,
+) {
+    var text by remember { mutableStateOf(altitudeM.roundToInt().toString()) }
+    val entered = text.toFloatOrNull()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Start mission") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = "Fly through $waypoints waypoint" +
+                        (if (waypoints == 1) "" else "s") + " at what altitude above home?",
+                    fontSize = 13.sp,
+                )
+                CoordinateField("Altitude (m)", text) { text = it }
+                Text(
+                    text = "Uploads the mission to the aircraft and switches it to AUTO.",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { entered?.let(onStart) },
+                enabled = entered != null && entered > 0f,
+            ) {
+                Text("Start")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
 private val FlyToBlue = Color(0xFF1E6FD9)
+
+/** The muted grey-blue the desktop uses for its corner readouts. */
+private val MapReadoutColor = Color(0xFFCFD8E0)
 
 /**
  * Flies to typed coordinates. The fields start from where the aircraft is, so
@@ -944,10 +1666,10 @@ private fun FlyToLatLonDialog(
     onDismiss: () -> Unit,
     onConfirm: (Double, Double, Float) -> Unit,
 ) {
-    var latText by remember { mutableStateOf(vehicle.lat?.let { "%.6f".format(it) } ?: "") }
-    var lonText by remember { mutableStateOf(vehicle.lon?.let { "%.6f".format(it) } ?: "") }
+    var latText by remember { mutableStateOf(vehicle.lat?.let { "%.6f".format(Locale.ROOT, it) } ?: "") }
+    var lonText by remember { mutableStateOf(vehicle.lon?.let { "%.6f".format(Locale.ROOT, it) } ?: "") }
     var altText by remember {
-        mutableStateOf(vehicle.altRelM?.takeIf { it > 1f }?.let { "%.0f".format(it) } ?: "100")
+        mutableStateOf(vehicle.altRelM?.takeIf { it > 1f }?.let { "%.0f".format(Locale.ROOT, it) } ?: "100")
     }
     val lat = latText.toDoubleOrNull()
     val lon = lonText.toDoubleOrNull()
@@ -1269,6 +1991,88 @@ private fun predictedTrack(
     return points
 }
 
+/** The leg still to be sent, and the one the aircraft already has. */
+private val MissionLineColor = Color(0xFF33AAFF)
+private val MissionSentLineColor = Color(0xB35B6B78)
+
+/** An altitude edited since it was sent, so the aircraft is still on the old one. */
+private val MissionPendingColor = Color(0xFFFFC107)
+
+/** Any waypoint that is not the one being flown to. */
+private val MissionIdleColor = Color(0xFF6B7480)
+
+private const val WAYPOINT_ICON_DP = 24
+
+/**
+ * A numbered disc for one mission waypoint. Drawn rather than shipped, because
+ * the number is the point's own place in the run and cannot be known up front.
+ */
+private fun waypointIcon(
+    context: Context,
+    number: Int,
+    altitudeM: Float,
+    pending: Boolean,
+    active: Boolean,
+): Drawable {
+    val side = (WAYPOINT_ICON_DP * context.resources.displayMetrics.density).toInt()
+    // An asterisk as well as the colour: on a bright field the amber alone is
+    // not always the first thing the eye catches.
+    val label = altitudeM.roundToInt().toString() + "m" + if (pending) " *" else ""
+    val height = (side * 1.55f).toInt()
+    val bitmap = Bitmap.createBitmap(side, height, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+    val centre = side / 2f
+    val stroke = side * 0.09f
+    val radius = centre - stroke
+    // Only the point the aircraft is flying to is lit. The rest are the
+    // route, not the target, and a map full of blue discs says nothing about
+    // where the aeroplane is actually going.
+    canvas.drawCircle(
+        centre,
+        centre,
+        radius,
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = if (active) FlyToBlue.toArgb() else MissionIdleColor.toArgb()
+        },
+    )
+    canvas.drawCircle(
+        centre,
+        centre,
+        radius,
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = stroke
+            color = android.graphics.Color.WHITE
+        },
+    )
+    val digits = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE
+        textAlign = Paint.Align.CENTER
+        textSize = side * 0.52f
+        isFakeBoldText = true
+    }
+    // Centre the digits on the disc rather than on the text baseline.
+    canvas.drawText(
+        number.toString(),
+        centre,
+        centre - (digits.descent() + digits.ascent()) / 2f,
+        digits,
+    )
+    val altitude = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = if (pending) {
+            MissionPendingColor.toArgb()
+        } else {
+            android.graphics.Color.WHITE
+        }
+        textAlign = Paint.Align.CENTER
+        textSize = side * 0.34f
+        isFakeBoldText = true
+        setShadowLayer(side * 0.08f, 0f, 0f, android.graphics.Color.BLACK)
+    }
+    canvas.drawText(label, centre, height - side * 0.08f, altitude)
+    return BitmapDrawable(context.resources, bitmap)
+}
+
 private const val HOME_ICON_DP = 72
 
 /** The home badge, scaled once the same way the aircraft marker is. */
@@ -1300,6 +2104,19 @@ private fun planeMarkerIcon(context: Context): Drawable {
         source.recycle()
     }
     return BitmapDrawable(context.resources, scaled)
+}
+
+/**
+ * A tile provider writing through the app's shared offline cache, so the map
+ * imagery and the reference labels are held to one limit and one database.
+ */
+private fun cachingProvider(context: Context, source: ITileSource): MapTileProviderBasic {
+    val cache = MapTileCache.fileCache
+    return if (cache != null) {
+        MapTileProviderBasic(context, source, cache)
+    } else {
+        MapTileProviderBasic(context, source)
+    }
 }
 
 /**
@@ -1342,6 +2159,11 @@ private fun VehicleMap(
     hybrid: Boolean,
     showGuides: Boolean,
     clearTrailToken: Int,
+    missionPoints: List<QueuedWaypoint>,
+    queuedCount: Int,
+    missionAltitudeM: Float,
+    activeWaypoint: Int?,
+    onWaypointTap: (Int) -> Unit,
     radarTiles: List<RadarTile>,
     onMapTap: (GeoPoint) -> Unit,
 ) {
@@ -1352,6 +2174,10 @@ private fun VehicleMap(
     val context = LocalContext.current
     val planeIcon = remember(context) { planeMarkerIcon(context) }
     val homeIcon = remember(context) { homeMarkerIcon(context) }
+    val flyTargetIcon = remember(context) { context.getDrawable(R.drawable.ic_fly_target) }
+    // The update lambda runs on every telemetry tick, so these are built
+    // once per number rather than once per frame.
+    val waypointIcons = remember(context) { mutableMapOf<String, Drawable>() }
     // Polyline paints through the android Paint API, so the themed colour has to
     // be resolved to an int out here rather than read inside the update lambda.
     val trailColor = MaterialTheme.colorScheme.error.toArgb()
@@ -1362,7 +2188,7 @@ private fun VehicleMap(
     // overlay rebuild that happens on every telemetry update.
     val referenceOverlays = remember(context) {
         EsriReferenceLayers.map { source ->
-            TilesOverlay(MapTileProviderBasic(context, source), context).apply {
+            TilesOverlay(cachingProvider(context, source), context).apply {
                 loadingBackgroundColor = android.graphics.Color.TRANSPARENT
                 loadingLineColor = android.graphics.Color.TRANSPARENT
             }
@@ -1372,10 +2198,11 @@ private fun VehicleMap(
     // The overlay is built once in factory, so it captures whatever handler was
     // current at that moment; this keeps it pointing at the latest one.
     val currentTap by rememberUpdatedState(onMapTap)
+    val currentWaypointTap by rememberUpdatedState(onWaypointTap)
     AndroidView(
         modifier = Modifier.fillMaxSize(),
         factory = { context ->
-            MapView(context).apply {
+            MapView(context, cachingProvider(context, EsriWorldImagery)).apply {
                 setTileSource(EsriWorldImagery)
                 setMultiTouchControls(true)
                 controller.setZoom(DEFAULT_ZOOM)
@@ -1450,7 +2277,7 @@ private fun VehicleMap(
                     val overGround = (vehicle.groundSpeedMs ?: 0f).toDouble()
                     val reach = (overGround * GUIDE_HORIZON_SECONDS)
                         .coerceIn(GUIDE_MIN_METRES, GUIDE_MAX_METRES)
-                    val heading = vehicle.headingDeg ?: vehicle.yawDeg
+                    val heading = vehicle.headingDeg ?: vehicle.yawDeg ?: 0f
                     val course = vehicle.groundCourseDeg ?: heading
                     // In still air the three nearly coincide, so they are drawn
                     // widest first and thinnest last, and the heading reaches a
@@ -1480,7 +2307,7 @@ private fun VehicleMap(
                     // osmdroid negates the bearing before it reaches
                     // Canvas.rotate, so a compass heading must be negated
                     // here to turn the icon the right way.
-                    rotation = -(vehicle.headingDeg ?: vehicle.yawDeg)
+                    rotation = -(vehicle.headingDeg ?: vehicle.yawDeg ?: 0f)
                 }
                 if (firstFix) {
                     map.controller.setZoom(DEFAULT_ZOOM)
@@ -1491,10 +2318,48 @@ private fun VehicleMap(
                     map.controller.setCenter(point)
                 }
             }
+            // The run is drawn before the markers so the discs sit on top of
+            // it. Queued legs are the live blue; legs already with the aircraft
+            // are muted, so what is flying and what is merely drawn stay apart.
+            val queuedLeg = missionPoints.take(queuedCount).map { it.point }
+            val sentLeg = missionPoints.drop(queuedCount).map { it.point }
+            if (sentLeg.size > 1) {
+                map.overlays += guideLine(sentLeg, MissionSentLineColor.toArgb(), 2.5f, dashed = true)
+            }
+            if (queuedLeg.size > 1) {
+                map.overlays += guideLine(queuedLeg, MissionLineColor.toArgb(), 2.5f, dashed = true)
+            }
+            missionPoints.forEachIndexed { index, waypoint ->
+                map.overlays += Marker(map).apply {
+                    position = waypoint.point
+                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                    // Every point states its height, the default included: a
+                    // blank label would read as "no altitude" rather than "the
+                    // mission's".
+                    val metres = waypoint.effectiveAltitude(missionAltitudeM)
+                    val pending = waypoint.isPending(missionAltitudeM)
+                    val active = index == activeWaypoint
+                    icon = waypointIcons.getOrPut("${index + 1}@$metres@$pending@$active") {
+                        waypointIcon(context, index + 1, metres, pending, active)
+                    }
+                    // No bubble: osmdroid's own info window pans the map to fit
+                    // itself, which is what made a waypoint tap throw the view
+                    // around. The tap opens the altitude editor instead, and is
+                    // consumed so it cannot also drop a new point.
+                    infoWindow = null
+                    setOnMarkerClickListener { _, _ ->
+                        currentWaypointTap(index)
+                        true
+                    }
+                }
+            }
             if (flyTarget != null) {
                 map.overlays += Marker(map).apply {
                     position = flyTarget
+                    // The pin's tip is the coordinate, so it hangs above the
+                    // point rather than sitting centred on it.
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                    flyTargetIcon?.let { icon = it }
                     title = "Fly to"
                 }
             }
@@ -1509,5 +2374,5 @@ private fun VehicleMap(
 
 private fun Float?.format(digits: Int): String {
     val value = this ?: return NO_DATA
-    return "%.${digits}f".format(value)
+    return "%.${digits}f".format(Locale.ROOT, value)
 }

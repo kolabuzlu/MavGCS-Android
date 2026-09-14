@@ -1,3 +1,17 @@
+import java.util.Properties
+
+/*
+ * Release signing, read from a keystore.properties that is deliberately not in
+ * the repository. The signing key is what proves an update came from the same
+ * author, so whoever holds it can publish something Android will install over
+ * this app. A clone without it still builds; the APK is just unsigned, which is
+ * enough to compile and test and not enough to install.
+ */
+val signing = Properties().apply {
+    val file = rootProject.file("keystore.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -13,12 +27,27 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = 1
-        versionName = "0.1.0"
+        versionName = "1.0.0"
         vectorDrawables.useSupportLibrary = true
+    }
+
+    signingConfigs {
+        if (signing.isNotEmpty()) {
+            create("release") {
+                storeFile = file(signing.getProperty("storeFile"))
+                storePassword = signing.getProperty("storePassword")
+                keyAlias = signing.getProperty("keyAlias")
+                keyPassword = signing.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
         release {
+            signingConfig = signingConfigs.findByName("release")
+            // Left off on purpose: message ids are read from the dialect's own
+            // runtime annotations rather than written out here, and shrinking
+            // is free to throw those away.
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -63,4 +92,5 @@ dependencies {
     implementation("io.dronefleet.mavlink:mavlink:1.1.11")
     implementation("org.osmdroid:osmdroid-android:6.1.20")
     debugImplementation("androidx.compose.ui:ui-tooling")
+    testImplementation("junit:junit:4.13.2")
 }

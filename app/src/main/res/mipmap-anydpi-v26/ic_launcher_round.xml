@@ -1,4 +1,13 @@
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@color/launcher_bg" />
-    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <!--
+      Pre-padded rather than inset here: the launcher shows only the middle of
+      the 108dp canvas, and this artwork has no margin of its own, so unpadded
+      it came back with the monitor's white frame sliced flat down both sides.
+      A layer-list's dp insets could not express the padding, because they are
+      added to the source bitmap's own pixel size before the result is
+      stretched over the canvas; padding baked into the asset is the one form
+      that stays proportional whatever size the icon is asked for.
+    -->
+    <foreground android:drawable="@drawable/ic_launcher_monitor" />
 </adaptive-icon>

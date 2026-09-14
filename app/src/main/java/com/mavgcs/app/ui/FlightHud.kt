@@ -1,16 +1,24 @@
 package com.mavgcs.app.ui
 
+import android.content.Context
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -21,6 +29,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
@@ -29,11 +38,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mavgcs.app.mavlink.HealthTint
 import com.mavgcs.app.mavlink.VehicleState
 import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.roundToInt
+import java.util.Locale
 
 private val SkyColor = Color(0xFF3A6EA5)
 private val GroundColor = Color(0xFF8B5A2B)
@@ -49,6 +60,20 @@ private val HeadingStripHeight = 18.dp
 
 /** Width of each vertical tape. The heading strip runs between the two. */
 private val TapeWidth = 40.dp
+
+/** The throttle column, inboard of the airspeed tape. */
+private val ThrottleBarWidth = 14.dp
+private val ThrottleFill = Color(0xFF3DDC97)
+
+/** The vertical speed column, inboard of the altitude tape. */
+private val VsiBarWidth = 14.dp
+private val VsiFill = HudYellow
+
+/** Fixed, so the battery block can be held clear of it without measuring. */
+private val VsiReadoutWidth = 40.dp
+
+/** What a full deflection means, up or down. */
+private const val VSI_FULL_SCALE_MS = 10f
 
 /** Degrees of heading visible across the width of the heading strip. */
 private const val HEADING_SPAN_DEG = 90f
@@ -75,6 +100,10 @@ private val hudScaleStyle = hudLabelStyle.copy(color = HudTextColor.copy(alpha =
 @Composable
 fun FlightHud(vehicle: VehicleState, modifier: Modifier = Modifier) {
     val measurer = rememberTextMeasurer()
+    val context = LocalContext.current
+    // Remembered across runs: the pack on the aircraft does not change between
+    // one launch of the app and the next.
+    var cells by remember { mutableStateOf(loadCellCount(context)) }
     BoxWithConstraints(
         modifier = modifier
             .clip(RoundedCornerShape(10.dp))
@@ -84,7 +113,7 @@ fun FlightHud(vehicle: VehicleState, modifier: Modifier = Modifier) {
         // position readouts collide, so the overlays tighten with it.
         val compact = maxHeight < 130.dp
         Canvas(modifier = Modifier.fillMaxSize()) {
-            drawHorizon(vehicle.rollDeg, vehicle.pitchDeg, measurer)
+            drawHorizon(vehicle.rollDeg ?: 0f, vehicle.pitchDeg ?: 0f, measurer)
             drawVerticalTape(
                 value = vehicle.airSpeedMs,
                 tickStep = 2f,
@@ -101,7 +130,9 @@ fun FlightHud(vehicle: VehicleState, modifier: Modifier = Modifier) {
                 onLeft = false,
                 measurer = measurer,
             )
-            drawHeadingStrip(vehicle.headingDeg ?: vehicle.yawDeg, measurer)
+            drawHeadingStrip(vehicle.headingDeg ?: vehicle.yawDeg ?: 0f, measurer)
+            drawThrottleBar(vehicle.throttlePct, measurer)
+            drawVerticalSpeedBar(vehicle.climbMs, measurer)
         }
 
         HudCaption(
@@ -125,16 +156,74 @@ fun FlightHud(vehicle: VehicleState, modifier: Modifier = Modifier) {
                 // shifts the content down by half of it, which lands it in the
                 // middle of what is left whatever height the HUD ends up.
                 .align(Alignment.CenterEnd)
-                .padding(top = HeadingStripHeight, end = 54.dp)
+                .padding(
+                    top = HeadingStripHeight,
+                    // Still clear of the vertical speed column and its readout,
+                    // just sitting a little closer to them.
+                    end = 46.dp + VsiBarWidth + VsiReadoutWidth,
+                )
                 .clip(RoundedCornerShape(6.dp))
                 .background(TapeBackground)
                 .padding(horizontal = 6.dp, vertical = if (compact) 2.dp else 5.dp),
             verticalArrangement = Arrangement.spacedBy(if (compact) 0.dp else 1.dp),
         ) {
             HudReadout(vehicle.batteryV.oneDecimal(), "V", compact)
+            // Per cell, which is the number that says how much is really left:
+            // a pack reads healthy long after its cells have sagged.
+            HudReadout(vehicle.batteryV?.div(cells).twoDecimals(), "V/C", compact)
             HudReadout(vehicle.batteryA.oneDecimal(), "A", compact)
             HudReadout(vehicle.batteryRemainingPct?.toString() ?: NO_VALUE, "%", compact)
+            CellCountSelector(
+                cells = cells,
+                compact = compact,
+                onSelect = {
+                    cells = it
+                    saveCellCount(context, it)
+                },
+            )
         }
+
+        // Mission Planner's own HUD convention: bottom middle, EKF left of
+        // centre and VIBE right of it, just the coloured word and no value.
+        Row(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = if (compact) 3.dp else 5.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            HudStatusFlag("EKF", vehicle.ekfTint, compact)
+            HudStatusFlag("VIBE", vehicle.vibeTint, compact)
+        }
+    }
+}
+
+/**
+ * One of the two HUD status words. White is the quiet state -- Mission Planner
+ * shows the word whatever it has to say, so its absence would be a fault the
+ * pilot could not see.
+ */
+@Composable
+private fun HudStatusFlag(label: String, tint: HealthTint?, compact: Boolean) {
+    val colour = when (tint) {
+        HealthTint.RED -> Color(0xFFFF3C3C)
+        HealthTint.YELLOW -> Color.Yellow
+        else -> Color.White
+    }
+    Box(
+        modifier = Modifier
+            .width(if (compact) 40.dp else 48.dp)
+            .background(Color(0xD20F0F0F))
+            .border(1.dp, Color.White.copy(alpha = 0.85f))
+            .padding(vertical = if (compact) 1.dp else 2.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            fontSize = if (compact) 7.sp else 8.sp,
+            fontWeight = FontWeight.Bold,
+            color = colour,
+            maxLines = 1,
+        )
     }
 }
 
@@ -213,6 +302,125 @@ private fun DrawScope.drawHorizon(rollDeg: Float, pitchDeg: Float, measurer: Tex
  * A sliding tape. Ticks are laid out around the current value so the scale moves
  * past a fixed pointer, rather than the pointer moving along a fixed scale.
  */
+/**
+ * Throttle as a column filling from the bottom, outboard of the airspeed tape.
+ *
+ * A bar rather than a number: what matters in the air is whether it is pinned
+ * or backing off, and that is a shape, read without stopping to parse a figure.
+ */
+/**
+ * Vertical speed as a needle either side of a centre line: level flight sits in
+ * the middle, and a full deflection is ten metres a second.
+ *
+ * Deliberately not a number. What the pilot needs mid-circuit is whether the
+ * aeroplane is going up or down and roughly how hard, and a needle either side
+ * of a datum answers that without being read.
+ */
+private fun DrawScope.drawVerticalSpeedBar(climbMs: Float?, measurer: TextMeasurer) {
+    val width = VsiBarWidth.toPx()
+    val left = size.width - TapeWidth.toPx() - width
+    drawRect(TapeBackground, topLeft = Offset(left, 0f), size = Size(width, size.height))
+
+    val inset = 2.dp.toPx()
+    val trackHeight = size.height - inset * 2
+    val centreY = inset + trackHeight / 2f
+    // The datum, drawn whether or not there is a reading: without it the column
+    // would be a blank strip rather than an instrument waiting for data.
+    drawLine(
+        color = Color.White.copy(alpha = 0.35f),
+        start = Offset(left, centreY),
+        end = Offset(left + width, centreY),
+        strokeWidth = 1f,
+    )
+
+    val climb = climbMs ?: return
+    val travel = (climb.coerceIn(-VSI_FULL_SCALE_MS, VSI_FULL_SCALE_MS) /
+        VSI_FULL_SCALE_MS) * (trackHeight / 2f)
+    val y = centreY - travel
+    drawRect(
+        color = VsiFill.copy(alpha = 0.5f),
+        topLeft = Offset(left + inset, minOf(centreY, y)),
+        size = Size(width - inset * 2, abs(travel)),
+    )
+    drawLine(
+        color = VsiFill,
+        start = Offset(left + inset, y),
+        end = Offset(left + width - inset, y),
+        strokeWidth = 2.5f,
+    )
+
+    // The figure sits outboard of the column at mid-height, boxed like the
+    // throttle's. Signed, because which way it is going is the whole point.
+    val sign = if (climb > 0.05f) "+" else ""
+    val readout = measurer.measure(
+        AnnotatedString(sign + "%.1f".format(Locale.ROOT, climb)),
+        hudLabelStyle,
+    )
+    val boxHeight = 16.dp.toPx()
+    val boxWidth = VsiReadoutWidth.toPx()
+    val boxLeft = left - boxWidth
+    drawRect(
+        color = Color.Black,
+        topLeft = Offset(boxLeft, centreY - boxHeight / 2f),
+        size = Size(boxWidth, boxHeight),
+    )
+    drawRect(
+        color = VsiFill,
+        topLeft = Offset(boxLeft, centreY - boxHeight / 2f),
+        size = Size(boxWidth, boxHeight),
+        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5f),
+    )
+    drawText(
+        textLayoutResult = readout,
+        topLeft = Offset(
+            boxLeft + (boxWidth - readout.size.width) / 2f,
+            centreY - readout.size.height / 2f,
+        ),
+    )
+}
+
+private fun DrawScope.drawThrottleBar(throttlePct: Int?, measurer: TextMeasurer) {
+    val width = ThrottleBarWidth.toPx()
+    val left = TapeWidth.toPx()
+    drawRect(TapeBackground, topLeft = Offset(left, 0f), size = Size(width, size.height))
+    val percent = throttlePct?.coerceIn(0, 100) ?: return
+    val inset = 2.dp.toPx()
+    val trackTop = inset
+    val trackHeight = size.height - inset * 2
+    val filled = trackHeight * percent / 100f
+    drawRect(
+        color = ThrottleFill,
+        topLeft = Offset(left + inset, trackTop + trackHeight - filled),
+        size = Size(width - inset * 2, filled),
+    )
+
+    // The figure sits beside the column at mid-height, boxed like the tapes'
+    // own readouts so the three read as one instrument.
+    val readout = measurer.measure(AnnotatedString("$percent%"), hudLabelStyle)
+    val centreY = size.height / 2f
+    val boxHeight = 16.dp.toPx()
+    val boxWidth = readout.size.width + 8.dp.toPx()
+    val boxLeft = left + width
+    drawRect(
+        color = Color.Black,
+        topLeft = Offset(boxLeft, centreY - boxHeight / 2f),
+        size = Size(boxWidth, boxHeight),
+    )
+    drawRect(
+        color = ThrottleFill,
+        topLeft = Offset(boxLeft, centreY - boxHeight / 2f),
+        size = Size(boxWidth, boxHeight),
+        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5f),
+    )
+    drawText(
+        textLayoutResult = readout,
+        topLeft = Offset(
+            boxLeft + (boxWidth - readout.size.width) / 2f,
+            centreY - readout.size.height / 2f,
+        ),
+    )
+}
+
 private fun DrawScope.drawVerticalTape(
     value: Float?,
     tickStep: Float,
@@ -277,8 +485,8 @@ private fun DrawScope.drawHeadingStrip(headingDeg: Float, measurer: TextMeasurer
     val height = HeadingStripHeight.toPx()
     // The strip runs between the tapes rather than over them, so the span it
     // covers is the width left in the middle, not the whole HUD.
-    val left = TapeWidth.toPx()
-    val right = size.width - TapeWidth.toPx()
+    val left = (ThrottleBarWidth + TapeWidth).toPx()
+    val right = size.width - (TapeWidth + VsiBarWidth).toPx()
     val spanWidth = right - left
     if (spanWidth <= 0f) {
         return
@@ -333,4 +541,55 @@ private fun DrawScope.drawHeadingStrip(headingDeg: Float, measurer: TextMeasurer
     )
 }
 
-private fun Float?.oneDecimal(): String = this?.let { "%.1f".format(it) } ?: NO_VALUE
+/** The pack sizes offered. */
+private val CELL_COUNTS = listOf(3, 4, 6)
+
+private const val CELLS_PREF_FILE = "mavgcs"
+private const val CELLS_PREF_KEY = "battery_cells"
+private const val DEFAULT_CELLS = 4
+
+private fun loadCellCount(context: Context): Int =
+    context.getSharedPreferences(CELLS_PREF_FILE, Context.MODE_PRIVATE)
+        .getInt(CELLS_PREF_KEY, DEFAULT_CELLS)
+        .takeIf { it in CELL_COUNTS }
+        ?: DEFAULT_CELLS
+
+private fun saveCellCount(context: Context, cells: Int) {
+    context.getSharedPreferences(CELLS_PREF_FILE, Context.MODE_PRIVATE)
+        .edit()
+        .putInt(CELLS_PREF_KEY, cells)
+        .apply()
+}
+
+/**
+ * How many cells the pack has, which is the only thing the app cannot work out
+ * for itself -- the vehicle reports a pack voltage and nothing about its make-up.
+ */
+@Composable
+private fun CellCountSelector(cells: Int, compact: Boolean, onSelect: (Int) -> Unit) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        modifier = Modifier.padding(top = if (compact) 1.dp else 3.dp),
+    ) {
+        CELL_COUNTS.forEach { count ->
+            val chosen = count == cells
+            Text(
+                text = count.toString() + "S",
+                fontSize = if (compact) 7.sp else 9.sp,
+                fontWeight = if (chosen) FontWeight.Bold else FontWeight.Normal,
+                color = if (chosen) Color.Black else HudTextColor.copy(alpha = 0.75f),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(if (chosen) HudYellow else Color.White.copy(alpha = 0.12f))
+                    .clickable { onSelect(count) }
+                    .padding(horizontal = if (compact) 3.dp else 5.dp, vertical = 1.dp),
+            )
+        }
+    }
+}
+
+private fun Float?.oneDecimal(): String = this?.let { "%.1f".format(Locale.ROOT, it) } ?: NO_VALUE
+
+/** Cell voltages are read to the hundredth; a tenth hides the sag that matters. */
+private fun Float?.twoDecimals(): String =
+    this?.let { "%.2f".format(Locale.ROOT, it) } ?: NO_VALUE
