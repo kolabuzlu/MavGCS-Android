@@ -31,7 +31,10 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowInsetsControllerCompat(window, window.decorView).apply {
-            hide(WindowInsetsCompat.Type.navigationBars())
+            // Full immersive: a ground station wants the whole panel, and on a
+            // short tablet the status bar would otherwise sit over the arm row.
+            // Both bars stay swipe-reachable via the transient behaviour below.
+            hide(WindowInsetsCompat.Type.systemBars())
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
         setContent {

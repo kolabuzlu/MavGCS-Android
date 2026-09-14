@@ -52,11 +52,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -79,6 +82,57 @@ import org.osmdroid.views.overlay.MapEventsOverlay
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polyline
 
+/**
+ * The left column has to fit without scrolling, and tablets differ a lot in
+ * height: the emulator is 800dp tall in landscape, a Galaxy Tab A9 only 601dp.
+ * Anything that does not fit is clipped rather than reachable, so these sizes
+ * come from the height actually available instead of being fixed.
+ */
+private data class LayoutMetrics(
+    val outerPadding: Dp,
+    val gap: Dp,
+    val columnPadding: Dp,
+    val armHeight: Dp,
+    val controlHeight: Dp,
+    val controlGap: Dp,
+    val hudHeight: Dp,
+    val gridLabel: TextUnit,
+    val gridValue: TextUnit,
+    val gridRowGap: Dp,
+    val showSectionLabel: Boolean,
+)
+
+private fun metricsFor(available: Dp): LayoutMetrics =
+    if (available < 700.dp) {
+        LayoutMetrics(
+            outerPadding = 8.dp,
+            gap = 6.dp,
+            columnPadding = 10.dp,
+            armHeight = 34.dp,
+            controlHeight = 30.dp,
+            controlGap = 6.dp,
+            hudHeight = 112.dp,
+            gridLabel = 8.sp,
+            gridValue = 12.sp,
+            gridRowGap = 6.dp,
+            showSectionLabel = false,
+        )
+    } else {
+        LayoutMetrics(
+            outerPadding = 12.dp,
+            gap = 12.dp,
+            columnPadding = 14.dp,
+            armHeight = 44.dp,
+            controlHeight = 38.dp,
+            controlGap = 8.dp,
+            hudHeight = 158.dp,
+            gridLabel = 9.sp,
+            gridValue = 14.sp,
+            gridRowGap = 10.dp,
+            showSectionLabel = true,
+        )
+    }
+
 @Composable
 fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
     val vehicle by viewModel.vehicle.collectAsStateWithLifecycle()
@@ -87,13 +141,14 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
     var flyTarget by remember { mutableStateOf<GeoPoint?>(null) }
     var showFlyDialog by remember { mutableStateOf(false) }
     var followUav by remember { mutableStateOf(true) }
+    val metrics = metricsFor(LocalConfiguration.current.screenHeightDp.dp)
 
     Surface(modifier = Modifier.fillMaxSize(), color = scheme.background) {
         Row(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                .padding(metrics.outerPadding),
+            horizontalArrangement = Arrangement.spacedBy(metrics.gap),
         ) {
             Column(
                 modifier = Modifier
@@ -101,27 +156,33 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                     .fillMaxHeight()
                     .clip(RoundedCornerShape(16.dp))
                     .background(scheme.surface)
-                    .padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                    .padding(metrics.columnPadding),
+                verticalArrangement = Arrangement.spacedBy(metrics.gap),
             ) {
-                ArmPad(enabled = vehicle.linkUp, onCommand = viewModel::command)
+                ArmPad(
+                    enabled = vehicle.linkUp,
+                    metrics = metrics,
+                    onCommand = viewModel::command,
+                )
                 FlightModePanel(
                     enabled = vehicle.linkUp,
                     currentMode = vehicle.mode,
+                    metrics = metrics,
                     onSelect = viewModel::setFlightMode,
                 )
 
                 GuidedControlPanel(
                     enabled = vehicle.linkUp,
+                    metrics = metrics,
                     onSend = viewModel::sendGuided,
                 )
                 FlightHud(
                     vehicle = vehicle,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(158.dp),
+                        .height(metrics.hudHeight),
                 )
-                TelemetryGrid(vehicle)
+                TelemetryGrid(vehicle, metrics)
             }
             Column(
                 modifier = Modifier
@@ -333,7 +394,7 @@ private val TopPanelHeight = 184.dp
 private data class TelemetryField(val label: String, val value: String)
 
 @Composable
-private fun TelemetryGrid(vehicle: VehicleState) {
+private fun TelemetryGrid(vehicle: VehicleState, metrics: LayoutMetrics) {
     val fields = listOf(
         TelemetryField("AirSpeed (m/s)", vehicle.airSpeedMs.format(1)),
         TelemetryField("GroundSpeed (m/s)", vehicle.groundSpeedMs.format(1)),
@@ -357,13 +418,13 @@ private fun TelemetryGrid(vehicle: VehicleState) {
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
             .background(MaterialTheme.colorScheme.background)
-            .padding(horizontal = 4.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+            .padding(horizontal = 4.dp, vertical = metrics.gridRowGap),
+        verticalArrangement = Arrangement.spacedBy(metrics.gridRowGap),
     ) {
         fields.chunked(4).forEach { row ->
             Row(modifier = Modifier.fillMaxWidth()) {
                 row.forEach { field ->
-                    TelemetryCell(field, Modifier.weight(1f))
+                    TelemetryCell(field, metrics, Modifier.weight(1f))
                 }
             }
         }
@@ -371,22 +432,26 @@ private fun TelemetryGrid(vehicle: VehicleState) {
 }
 
 @Composable
-private fun TelemetryCell(field: TelemetryField, modifier: Modifier = Modifier) {
+private fun TelemetryCell(
+    field: TelemetryField,
+    metrics: LayoutMetrics,
+    modifier: Modifier = Modifier,
+) {
     Column(
         modifier = modifier.padding(horizontal = 2.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
             text = field.label,
-            fontSize = 9.sp,
-            lineHeight = 11.sp,
+            fontSize = metrics.gridLabel,
+            lineHeight = metrics.gridLabel * 1.25f,
             color = MaterialTheme.colorScheme.secondary,
             textAlign = TextAlign.Center,
             maxLines = 2,
         )
         Text(
             text = field.value,
-            fontSize = 14.sp,
+            fontSize = metrics.gridValue,
             fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
@@ -395,14 +460,22 @@ private fun TelemetryCell(field: TelemetryField, modifier: Modifier = Modifier) 
 }
 
 @Composable
-private fun ArmPad(enabled: Boolean, onCommand: (GcsCommand) -> Unit) {
+private fun ArmPad(
+    enabled: Boolean,
+    metrics: LayoutMetrics,
+    onCommand: (GcsCommand) -> Unit,
+) {
     val scheme = MaterialTheme.colorScheme
-    Text("COMMANDS", fontWeight = FontWeight.Bold, color = scheme.primary)
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    if (metrics.showSectionLabel) {
+        Text("COMMANDS", fontWeight = FontWeight.Bold, color = scheme.primary)
+    }
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(metrics.controlGap)) {
         Button(
             onClick = { onCommand(GcsCommand.ARM) },
             enabled = enabled,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier
+                .weight(1f)
+                .height(metrics.armHeight),
             colors = ButtonDefaults.buttonColors(
                 containerColor = scheme.primary,
                 contentColor = scheme.onPrimary,
@@ -414,7 +487,9 @@ private fun ArmPad(enabled: Boolean, onCommand: (GcsCommand) -> Unit) {
         Button(
             onClick = { onCommand(GcsCommand.DISARM) },
             enabled = enabled,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier
+                .weight(1f)
+                .height(metrics.armHeight),
             border = BorderStroke(1.dp, scheme.outline),
             colors = ButtonDefaults.buttonColors(
                 containerColor = scheme.surfaceVariant,
@@ -437,6 +512,7 @@ private fun GroupBox(
     title: String,
     modifier: Modifier = Modifier,
     titleBackground: Color = MaterialTheme.colorScheme.surface,
+    contentGap: Dp = 8.dp,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -447,7 +523,7 @@ private fun GroupBox(
                 .padding(top = 7.dp)
                 .border(1.dp, scheme.outline, RoundedCornerShape(8.dp))
                 .padding(start = 10.dp, end = 10.dp, top = 12.dp, bottom = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(contentGap),
             content = content,
         )
         Text(
@@ -556,27 +632,34 @@ private fun MessagesPanel(statusLog: List<String>, modifier: Modifier = Modifier
 private fun FlightModePanel(
     enabled: Boolean,
     currentMode: String,
+    metrics: LayoutMetrics,
     onSelect: (PlaneModeButton) -> Unit,
 ) {
-    GroupBox(title = "Flight Mode", modifier = Modifier.fillMaxWidth()) {
+    GroupBox(
+        title = "Flight Mode",
+        modifier = Modifier.fillMaxWidth(),
+        contentGap = metrics.controlGap,
+    ) {
         FlightModes.planeModeRows.forEach { row ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(metrics.controlGap)) {
                 row.forEach { mode ->
                     ModeButton(
                         label = mode.label,
                         active = currentMode == mode.label,
                         enabled = enabled,
+                        height = metrics.controlHeight,
                         modifier = Modifier.weight(1f),
                         onClick = { onSelect(mode) },
                     )
                 }
             }
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(metrics.controlGap)) {
             ModeButton(
                 label = FlightModes.planeGuidedMode.label,
                 active = currentMode == FlightModes.planeGuidedMode.label,
                 enabled = enabled,
+                height = metrics.controlHeight,
                 modifier = Modifier.weight(1f),
                 onClick = { onSelect(FlightModes.planeGuidedMode) },
             )
@@ -588,16 +671,22 @@ private fun FlightModePanel(
 @Composable
 private fun GuidedControlPanel(
     enabled: Boolean,
+    metrics: LayoutMetrics,
     onSend: (GuidedAction, Float) -> Unit,
 ) {
     var pending by remember { mutableStateOf<GuidedAction?>(null) }
-    GroupBox(title = "Guided Control", modifier = Modifier.fillMaxWidth()) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    GroupBox(
+        title = "Guided Control",
+        modifier = Modifier.fillMaxWidth(),
+        contentGap = metrics.controlGap,
+    ) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(metrics.controlGap)) {
             GuidedAction.entries.forEach { action ->
                 ModeButton(
                     label = action.label,
                     active = false,
                     enabled = enabled,
+                    height = metrics.controlHeight,
                     modifier = Modifier.weight(1f),
                     maxLines = 2,
                     onClick = { pending = action },
@@ -658,6 +747,7 @@ private fun ModeButton(
     label: String,
     active: Boolean,
     enabled: Boolean,
+    height: Dp,
     modifier: Modifier = Modifier,
     maxLines: Int = 1,
     onClick: () -> Unit,
@@ -666,7 +756,7 @@ private fun ModeButton(
     Button(
         onClick = onClick,
         enabled = enabled,
-        modifier = modifier.height(38.dp),
+        modifier = modifier.height(height),
         shape = RoundedCornerShape(6.dp),
         contentPadding = PaddingValues(horizontal = 2.dp),
         border = if (active) null else BorderStroke(1.dp, scheme.outline),
