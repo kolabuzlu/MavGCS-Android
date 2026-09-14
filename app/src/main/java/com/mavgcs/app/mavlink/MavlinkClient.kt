@@ -298,15 +298,27 @@ class MavlinkClient {
         val connection = MavlinkConnection.create(input, output)
         connectionRef.set(connection)
         heartbeat = thread(name = "mavlink-hb", isDaemon = true) {
-            while (running.get() && !Thread.currentThread().isInterrupted) {
-                runCatching { tx.execute { runCatching { sendHeartbeat(connection) } } }
-                Thread.sleep(1000)
+            // disconnect() interrupts this thread, which makes the sleep throw.
+            // An uncaught exception on any thread takes the whole process down
+            // with it, so the normal way out has to be caught here.
+            try {
+                while (running.get() && !Thread.currentThread().isInterrupted) {
+                    runCatching { tx.execute { runCatching { sendHeartbeat(connection) } } }
+                    Thread.sleep(HEARTBEAT_INTERVAL_MS)
+                }
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
             }
         }
         thread(name = "mavlink-parse", isDaemon = true) {
-            while (running.get() && !Thread.currentThread().isInterrupted) {
-                val message = runCatching { connection.next() }.getOrNull() ?: continue
-                onMessage(connection, message)
+            try {
+                while (running.get() && !Thread.currentThread().isInterrupted) {
+                    val message = runCatching { connection.next() }.getOrNull() ?: continue
+                    // A malformed message must not be fatal either.
+                    runCatching { onMessage(connection, message) }
+                }
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
             }
         }
     }
@@ -616,6 +628,7 @@ class MavlinkClient {
         private const val LOITER_RADIUS_PARAM = "WP_LOITER_RAD"
         private const val REPOSITION_CHANGE_MODE = 1
         private const val HOME_POSITION_MESSAGE_ID = 242
+        private const val HEARTBEAT_INTERVAL_MS = 1000L
     }
 }
 

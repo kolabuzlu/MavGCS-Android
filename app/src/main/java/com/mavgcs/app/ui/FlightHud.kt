@@ -43,6 +43,9 @@ private val HudTextColor = Color(0xFFE6E6E6)
 /** Degrees of pitch from the centre of the horizon to the top of the HUD. */
 private const val PITCH_HALF_RANGE_DEG = 35f
 
+/** Height of the heading strip. The battery block is placed clear of it. */
+private val HeadingStripHeight = 18.dp
+
 /** Degrees of heading visible across the width of the heading strip. */
 private const val HEADING_SPAN_DEG = 90f
 
@@ -108,7 +111,7 @@ fun FlightHud(vehicle: VehicleState, modifier: Modifier = Modifier) {
         Column(
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(top = if (compact) 10.dp else 24.dp, end = 54.dp)
+                .padding(top = HeadingStripHeight + if (compact) 3.dp else 8.dp, end = 54.dp)
                 .clip(RoundedCornerShape(6.dp))
                 .background(TapeBackground)
                 .padding(horizontal = 6.dp, vertical = if (compact) 2.dp else 5.dp),
@@ -255,7 +258,7 @@ private fun DrawScope.drawVerticalTape(
 }
 
 private fun DrawScope.drawHeadingStrip(headingDeg: Float, measurer: TextMeasurer) {
-    val height = 18.dp.toPx()
+    val height = HeadingStripHeight.toPx()
     drawRect(TapeBackground, topLeft = Offset(0f, 0f), size = Size(size.width, height))
 
     val pxPerDeg = size.width / HEADING_SPAN_DEG
