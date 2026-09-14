@@ -65,7 +65,7 @@ private val hudLabelStyle = TextStyle(
  * The sliding scale numbers are context, not the reading, so they are drawn at
  * half strength. The value in the pointer box keeps the full weight.
  */
-private val hudScaleStyle = hudLabelStyle.copy(color = HudTextColor.copy(alpha = 0.5f))
+private val hudScaleStyle = hudLabelStyle.copy(color = HudTextColor.copy(alpha = 0.32f))
 
 /**
  * The desktop HUD: a full-width artificial horizon with an airspeed tape on the
@@ -140,7 +140,9 @@ fun FlightHud(vehicle: VehicleState, modifier: Modifier = Modifier) {
 
 @Composable
 private fun HudCaption(text: String, modifier: Modifier = Modifier) {
-    Text(text = text, fontSize = 8.sp, color = HudTextColor.copy(alpha = 0.8f), modifier = modifier)
+    // Full white: these name the tapes, so they should read at a glance even
+    // though the sliding numbers beside them are deliberately faint.
+    Text(text = text, fontSize = 8.sp, color = Color.White, modifier = modifier)
 }
 
 @Composable
