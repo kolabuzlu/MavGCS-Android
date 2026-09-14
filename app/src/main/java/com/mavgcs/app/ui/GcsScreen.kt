@@ -254,9 +254,11 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                         showGuides = showGuides,
                         onMapTap = { flyTarget = it },
                     )
-                    Column(
-                        modifier = Modifier.align(Alignment.TopStart),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         MapToggle("Follow UAV", followUav) { followUav = !followUav }
                         MapToggle("Hybrid", hybridMap) { hybridMap = !hybridMap }
