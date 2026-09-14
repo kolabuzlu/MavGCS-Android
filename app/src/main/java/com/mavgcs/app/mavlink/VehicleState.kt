@@ -41,6 +41,14 @@ data class VehicleState(
     val rangefinderM: Float? = null,
     val distToHomeM: Float? = null,
     val distToWpM: Float? = null,
+    /**
+     * The bearing the navigation controller is steering, in degrees true.
+     *
+     * With the distance beside it this says where the vehicle is being taken
+     * without downloading the mission: the current waypoint under AUTO, home
+     * or the loiter point under RTL, whatever a guided command named.
+     */
+    val navBearingDeg: Float? = null,
     val windDirectionDeg: Float? = null,
     val windSpeedMs: Float? = null,
     val qnhHpa: Float? = null,

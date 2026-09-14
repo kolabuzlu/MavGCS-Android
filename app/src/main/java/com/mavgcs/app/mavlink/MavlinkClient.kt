@@ -497,7 +497,13 @@ class MavlinkClient {
             is MissionRequestInt -> onMissionRequest(payload.seq())
             is MissionRequest -> onMissionRequest(payload.seq())
             is NavControllerOutput -> _state.update {
-                it.copy(distToWpM = payload.wpDist().toFloat())
+                // One message carries both which way the controller is
+                // steering and how far it has left to go, which is the whole
+                // of the line to the target.
+                it.copy(
+                    distToWpM = payload.wpDist().toFloat(),
+                    navBearingDeg = normaliseBearing(payload.targetBearing().toFloat()),
+                )
             }
             // Ported from Mission Planner's own HUD.cs so the verdicts match
             // it exactly: the worst of the five variances decides, except that

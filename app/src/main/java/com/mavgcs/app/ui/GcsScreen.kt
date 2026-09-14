@@ -1937,10 +1937,16 @@ private class WeatherOverlay : Overlay() {
     }
 }
 
-/** Seconds of flight the predictive lines reach ahead of the aircraft. */
-private const val GUIDE_HORIZON_SECONDS = 10.0
-private const val GUIDE_MIN_METRES = 60.0
-private const val GUIDE_MAX_METRES = 600.0
+/**
+ * Seconds of flight the predictive lines reach ahead of the aircraft.
+ *
+ * The floor and ceiling double with the horizon rather than staying put: they
+ * are the same reach expressed for the standstill and flat out cases, and left
+ * alone they would clamp the lines back to their old length at both ends.
+ */
+private const val GUIDE_HORIZON_SECONDS = 20.0
+private const val GUIDE_MIN_METRES = 120.0
+private const val GUIDE_MAX_METRES = 1200.0
 private const val TRACK_STEPS = 24
 
 /** The heading line overshoots the others so its tip stays visible. */
@@ -1949,6 +1955,9 @@ private const val HEADING_REACH_FACTOR = 1.25
 private val HeadingLineColor = Color(0xFFFFFFFF)
 private val GroundTrackColor = Color(0xFF4FC3F7)
 private val TrajectoryColor = Color(0xFFFFD54F)
+
+/** The line to whatever the navigation controller is steering for. */
+private val NavTargetColor = Color(0xFFFF2FD0)
 
 private fun guideLine(
     points: List<GeoPoint>,
@@ -2197,6 +2206,7 @@ private fun VehicleMap(
     val headingColor = HeadingLineColor.toArgb()
     val courseColor = GroundTrackColor.toArgb()
     val trajectoryColor = TrajectoryColor.toArgb()
+    val navTargetColor = NavTargetColor.toArgb()
     // Built once: each carries a tile provider and cache that should survive the
     // overlay rebuild that happens on every telemetry update.
     val referenceOverlays = remember(context) {
@@ -2300,6 +2310,20 @@ private fun VehicleMap(
                         trajectoryColor,
                         7f,
                     )
+                    // Straight at whatever the navigation controller is
+                    // steering for, drawn its whole reported length rather
+                    // than a fixed reach: the point of it is that it ends on
+                    // the target. Under RTL that is home, under AUTO the
+                    // waypoint being flown to.
+                    val navBearing = vehicle.navBearingDeg
+                    val navDistance = (vehicle.distToWpM ?: 0f).toDouble()
+                    if (navBearing != null && navDistance > 0.0) {
+                        map.overlays += guideLine(
+                            listOf(point, destination(point, navBearing, navDistance)),
+                            navTargetColor,
+                            5f,
+                        )
+                    }
                     map.overlays += guideLine(
                         listOf(point, destination(point, course, reach)),
                         courseColor,
