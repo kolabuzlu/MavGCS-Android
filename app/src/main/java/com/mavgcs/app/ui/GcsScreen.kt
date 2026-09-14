@@ -2,9 +2,12 @@ package com.mavgcs.app.ui
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.BitmapFactory
 import android.graphics.DashPathEffect
 import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.Rect
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import androidx.compose.foundation.BorderStroke
@@ -50,6 +53,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -80,17 +84,24 @@ import com.mavgcs.app.mavlink.GuidedAction
 import com.mavgcs.app.mavlink.LinkType
 import com.mavgcs.app.mavlink.PlaneModeButton
 import com.mavgcs.app.mavlink.VehicleState
+import com.mavgcs.app.weather.RadarFrame
+import com.mavgcs.app.weather.RadarTile
+import com.mavgcs.app.weather.RainViewer
 import kotlin.math.asin
 import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.hypot
 import kotlin.math.sin
+import kotlinx.coroutines.delay
 import org.osmdroid.tileprovider.MapTileProviderBasic
 import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
 import org.osmdroid.events.MapEventsReceiver
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.util.MapTileIndex
 import org.osmdroid.views.MapView
+import org.osmdroid.views.Projection
 import org.osmdroid.views.overlay.MapEventsOverlay
+import org.osmdroid.views.overlay.Overlay
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polyline
 import org.osmdroid.views.overlay.TilesOverlay
@@ -169,6 +180,51 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
     var showGuides by remember { mutableStateOf(true) }
     // Bumped to ask the map to drop its trail; the map owns the points.
     var clearTrailToken by remember { mutableStateOf(0) }
+    var showWeather by remember { mutableStateOf(false) }
+    var radarFrame by remember { mutableStateOf<RadarFrame?>(null) }
+
+    // Frames age out of RainViewer's index, so the newest one has to be
+    // re-read while the layer is on, and dropped when it is switched off.
+    var radarTiles by remember { mutableStateOf<List<RadarTile>>(emptyList()) }
+    LaunchedEffect(showWeather) {
+        if (!showWeather) {
+            radarFrame = null
+            radarTiles = emptyList()
+            return@LaunchedEffect
+        }
+        while (true) {
+            RainViewer.latestFrame()?.let { radarFrame = it }
+            delay(WEATHER_REFRESH_MS)
+        }
+    }
+
+    // Keyed on the tile the aircraft sits in rather than its position: one tile
+    // spans hundreds of kilometres, so this refetches when the frame rolls over
+    // or the aircraft crosses a tile, not on every telemetry update.
+    val radarKey = vehicle.lat?.let { lat ->
+        vehicle.lon?.let { lon ->
+            val zoom = RainViewer.MAX_RADAR_ZOOM
+            "${RainViewer.tileX(lon, zoom)}/${RainViewer.tileY(lat, zoom)}"
+        }
+    }
+    LaunchedEffect(radarFrame, radarKey) {
+        val frame = radarFrame
+        val lat = vehicle.lat
+        val lon = vehicle.lon
+        if (frame == null || lat == null || lon == null) {
+            radarTiles = emptyList()
+            return@LaunchedEffect
+        }
+        val latSpan = WEATHER_RADIUS_METRES / METRES_PER_DEGREE_LAT
+        val lonSpan = latSpan / cos(Math.toRadians(lat)).coerceAtLeast(0.01)
+        radarTiles = RainViewer.tilesCovering(
+            frame = frame,
+            northLat = lat + latSpan,
+            southLat = lat - latSpan,
+            westLon = lon - lonSpan,
+            eastLon = lon + lonSpan,
+        )
+    }
     val configuration = LocalConfiguration.current
     val metrics = metricsFor(configuration.screenWidthDp.dp, configuration.screenHeightDp.dp)
 
@@ -255,6 +311,7 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                         hybrid = hybridMap,
                         showGuides = showGuides,
                         clearTrailToken = clearTrailToken,
+                        radarTiles = radarTiles,
                         onMapTap = { flyTarget = it },
                     )
                     Row(
@@ -266,6 +323,7 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                         MapToggle("Follow UAV", followUav) { followUav = !followUav }
                         MapToggle("Vectors", showGuides) { showGuides = !showGuides }
                         MapButton("Clear Trail") { clearTrailToken++ }
+                        MapToggle("Weather", showWeather) { showWeather = !showWeather }
                         MapToggle("Hybrid", hybridMap) { hybridMap = !hybridMap }
                     }
                     MapCoordinates(
@@ -951,6 +1009,82 @@ private val DEFAULT_CENTRE = GeoPoint(39.92502382797436, 32.83690999712254)
 /** Opening zoom, set in one place so the factory and the first fix agree. */
 private const val DEFAULT_ZOOM = 16.0
 
+/** How far around the aircraft the radar is drawn. */
+private const val WEATHER_RADIUS_METRES = 50_000.0
+private const val WEATHER_REFRESH_MS = 5L * 60L * 1000L
+
+private const val METRES_PER_DEGREE_LAT = 111_320.0
+
+/**
+ * Radar drawn from tiles fetched at RainViewer's deepest supported zoom and
+ * stretched to wherever they land on screen, then clipped to a circle around
+ * the aircraft.
+ *
+ * A plain tile overlay cannot do this: above zoom 7 RainViewer answers with a
+ * "Zoom Level Not Supported" placard rather than an error, so osmdroid would
+ * cache and draw that, and its own upscaling only works from tiles already in
+ * the cache -- which at flying zoom they never would be.
+ */
+private class WeatherOverlay : Overlay() {
+
+    var tiles: List<RadarTile> = emptyList()
+    var centre: GeoPoint? = null
+
+    private val paint = Paint().apply {
+        isFilterBitmap = true
+        // Flying inside a cell fills the whole viewport with one colour, so the
+        // wash has to stay light enough to read the ground through.
+        alpha = 120
+    }
+
+    override fun draw(canvas: Canvas, projection: Projection) {
+        val around = centre ?: return
+        if (tiles.isEmpty()) {
+            return
+        }
+        val middle = projection.toPixels(around, null)
+        // Measured on screen rather than derived from the zoom, so it stays
+        // 50km however the projection scales at this latitude.
+        val edge = projection.toPixels(destination(around, 0f, WEATHER_RADIUS_METRES), null)
+        val radiusPx = hypot(
+            (edge.x - middle.x).toDouble(),
+            (edge.y - middle.y).toDouble(),
+        ).toFloat()
+        if (radiusPx <= 0f) {
+            return
+        }
+        canvas.save()
+        canvas.clipPath(
+            Path().apply {
+                addCircle(middle.x.toFloat(), middle.y.toFloat(), radiusPx, Path.Direction.CW)
+            },
+        )
+        tiles.forEach { tile ->
+            val topLeft = projection.toPixels(
+                GeoPoint(
+                    RainViewer.tileNorthLat(tile.y, tile.zoom),
+                    RainViewer.tileWestLon(tile.x, tile.zoom),
+                ),
+                null,
+            )
+            val bottomRight = projection.toPixels(
+                GeoPoint(
+                    RainViewer.tileNorthLat(tile.y + 1, tile.zoom),
+                    RainViewer.tileWestLon(tile.x + 1, tile.zoom),
+                ),
+                null,
+            )
+            canvas.drawBitmap(
+                tile.image,
+                null,
+                Rect(topLeft.x, topLeft.y, bottomRight.x, bottomRight.y),
+                paint,
+            )
+        }
+        canvas.restore()
+    }
+}
+
 /** Seconds of flight the predictive lines reach ahead of the aircraft. */
 private const val GUIDE_HORIZON_SECONDS = 10.0
 private const val GUIDE_MIN_METRES = 60.0
@@ -1091,6 +1225,7 @@ private fun VehicleMap(
     hybrid: Boolean,
     showGuides: Boolean,
     clearTrailToken: Int,
+    radarTiles: List<RadarTile>,
     onMapTap: (GeoPoint) -> Unit,
 ) {
     val trail = remember { mutableListOf<GeoPoint>() }
@@ -1116,6 +1251,7 @@ private fun VehicleMap(
             }
         }
     }
+    val weatherOverlay = remember { WeatherOverlay() }
     // The overlay is built once in factory, so it captures whatever handler was
     // current at that moment; this keeps it pointing at the latest one.
     val currentTap by rememberUpdatedState(onMapTap)
@@ -1185,6 +1321,13 @@ private fun VehicleMap(
                         outlinePaint.color = trailColor
                         outlinePaint.strokeCap = Paint.Cap.ROUND
                     }
+                }
+                if (radarTiles.isNotEmpty()) {
+                    // Index 0 keeps the radar under the aircraft, its trail and
+                    // the reference labels.
+                    weatherOverlay.tiles = radarTiles
+                    weatherOverlay.centre = point
+                    map.overlays.add(0, weatherOverlay)
                 }
                 if (showGuides) {
                     val overGround = (vehicle.groundSpeedMs ?: 0f).toDouble()
