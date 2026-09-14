@@ -7,8 +7,14 @@ import android.graphics.Paint
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -161,6 +167,7 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
             ) {
                 ArmPad(
                     enabled = vehicle.linkUp,
+                    armed = vehicle.armed,
                     metrics = metrics,
                     onCommand = viewModel::command,
                 )
@@ -494,9 +501,13 @@ private fun TelemetryCell(
     }
 }
 
+/** How long DISARM must be held before it fires. */
+private const val DISARM_HOLD_MILLIS = 3000
+
 @Composable
 private fun ArmPad(
     enabled: Boolean,
+    armed: Boolean,
     metrics: LayoutMetrics,
     onCommand: (GcsCommand) -> Unit,
 ) {
@@ -505,43 +516,92 @@ private fun ArmPad(
         Text("COMMANDS", fontWeight = FontWeight.Bold, color = scheme.primary)
     }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(metrics.controlGap)) {
+        // Red marks the state the vehicle is actually in, not the action the
+        // button performs, so a glance says whether the props are live.
         Button(
             onClick = { onCommand(GcsCommand.ARM) },
             enabled = enabled,
             modifier = Modifier
                 .weight(1f)
                 .height(metrics.armHeight),
+            border = if (armed) null else BorderStroke(1.dp, scheme.outline),
             colors = ButtonDefaults.buttonColors(
-                containerColor = scheme.primary,
-                contentColor = scheme.onPrimary,
+                containerColor = if (armed) scheme.error else scheme.surfaceVariant,
+                contentColor = if (armed) Color.White else scheme.onSurface,
             ),
         ) {
             Text("ARM", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         }
-        // Monochrome, so the armed-state colour never reads as a second live action.
-        Button(
-            onClick = { onCommand(GcsCommand.DISARM) },
+        HoldToDisarmButton(
             enabled = enabled,
-            modifier = Modifier
-                .weight(1f)
-                .height(metrics.armHeight),
-            border = BorderStroke(1.dp, scheme.outline),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = scheme.surfaceVariant,
-                contentColor = scheme.onSurface,
-            ),
-        ) {
-            Text("DISARM", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            armed = armed,
+            metrics = metrics,
+            onDisarm = { onCommand(GcsCommand.DISARM) },
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+/**
+ * Disarming in flight cuts the motors, so it is deliberately not a single tap.
+ * The command fires only once the press has been held for the full duration;
+ * releasing early snaps the progress back and sends nothing.
+ */
+@Composable
+private fun HoldToDisarmButton(
+    enabled: Boolean,
+    armed: Boolean,
+    metrics: LayoutMetrics,
+    onDisarm: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val scheme = MaterialTheme.colorScheme
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val holding = pressed && enabled
+    val progress by animateFloatAsState(
+        targetValue = if (holding) 1f else 0f,
+        animationSpec = if (holding) {
+            tween(durationMillis = DISARM_HOLD_MILLIS, easing = LinearEasing)
+        } else {
+            snap()
+        },
+        finishedListener = { value -> if (value >= 1f) onDisarm() },
+        label = "disarmHold",
+    )
+    Button(
+        onClick = {},
+        enabled = enabled,
+        interactionSource = interaction,
+        modifier = modifier.height(metrics.armHeight),
+        border = if (armed) BorderStroke(1.dp, scheme.outline) else null,
+        contentPadding = PaddingValues(0.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (armed) scheme.surfaceVariant else scheme.error,
+            contentColor = if (armed) scheme.onSurface else Color.White,
+        ),
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            if (progress > 0f) {
+                // White works as the fill over both the red and the grey state.
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .fillMaxHeight()
+                        .fillMaxWidth(progress)
+                        .background(Color.White.copy(alpha = 0.28f)),
+                )
+            }
+            Text(
+                text = if (holding) "HOLD\u2026" else "DISARM",
+                modifier = Modifier.align(Alignment.Center),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
         }
     }
 }
 
-
-/**
- * A titled group box in the desktop's style. The border sits inside a top inset
- * so the title can straddle it; the title paints [titleBackground] over the line
- * behind it, so that colour has to match whatever the box is sitting on.
- */
 @Composable
 private fun GroupBox(
     title: String,
