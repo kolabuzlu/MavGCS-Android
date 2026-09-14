@@ -79,6 +79,7 @@ import com.mavgcs.app.mavlink.GuidedAction
 import com.mavgcs.app.mavlink.LinkType
 import com.mavgcs.app.mavlink.PlaneModeButton
 import com.mavgcs.app.mavlink.VehicleState
+import org.osmdroid.tileprovider.MapTileProviderBasic
 import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
 import org.osmdroid.events.MapEventsReceiver
 import org.osmdroid.util.GeoPoint
@@ -87,6 +88,7 @@ import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.MapEventsOverlay
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polyline
+import org.osmdroid.views.overlay.TilesOverlay
 
 /**
  * The left column has to fit without scrolling, and tablets differ a lot in
@@ -147,6 +149,7 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
     var flyTarget by remember { mutableStateOf<GeoPoint?>(null) }
     var showFlyDialog by remember { mutableStateOf(false) }
     var followUav by remember { mutableStateOf(true) }
+    var hybridMap by remember { mutableStateOf(false) }
     val metrics = metricsFor(LocalConfiguration.current.screenHeightDp.dp)
 
     Surface(modifier = Modifier.fillMaxSize(), color = scheme.background) {
@@ -229,13 +232,16 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                         vehicle = vehicle,
                         flyTarget = flyTarget,
                         followUav = followUav,
+                        hybrid = hybridMap,
                         onMapTap = { flyTarget = it },
                     )
-                    FollowUavToggle(
-                        following = followUav,
-                        onToggle = { followUav = !followUav },
+                    Column(
                         modifier = Modifier.align(Alignment.TopStart),
-                    )
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        MapToggle("Follow UAV", followUav) { followUav = !followUav }
+                        MapToggle("Hybrid", hybridMap) { hybridMap = !hybridMap }
+                    }
                     MapCoordinates(
                         lat = vehicle.lat,
                         lon = vehicle.lon,
@@ -309,15 +315,15 @@ private fun MapCoordinate(label: String, value: Double?) {
 }
 
 @Composable
-private fun FollowUavToggle(
-    following: Boolean,
-    onToggle: () -> Unit,
+private fun MapToggle(
+    label: String,
+    checked: Boolean,
     modifier: Modifier = Modifier,
+    onToggle: () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
     Row(
         modifier = modifier
-            .padding(10.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(scheme.surface.copy(alpha = 0.9f))
             .clickable(onClick = onToggle)
@@ -326,12 +332,12 @@ private fun FollowUavToggle(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Icon(
-            imageVector = if (following) Icons.Filled.CheckBox else Icons.Filled.CheckBoxOutlineBlank,
+            imageVector = if (checked) Icons.Filled.CheckBox else Icons.Filled.CheckBoxOutlineBlank,
             contentDescription = null,
-            tint = if (following) scheme.primary else scheme.onSurfaceVariant,
+            tint = if (checked) scheme.primary else scheme.onSurfaceVariant,
             modifier = Modifier.size(16.dp),
         )
-        Text("Follow UAV", fontSize = 12.sp, color = scheme.onSurface)
+        Text(label, fontSize = 12.sp, color = scheme.onSurface)
     }
 }
 
@@ -895,16 +901,17 @@ private fun planeMarkerIcon(context: Context): Drawable {
 }
 
 /**
- * ESRI World Imagery. The tile path is {z}/{y}/{x} -- ArcGIS orders it
- * level/row/column, not the {z}/{x}/{y} that osmdroid's XYTileSource emits.
+ * ArcGIS serves tiles as {z}/{y}/{x} -- level/row/column -- not the {z}/{x}/{y}
+ * that osmdroid's XYTileSource emits. Both orderings return a valid tile, so
+ * getting it wrong renders imagery of the wrong place rather than failing.
  */
-private val EsriWorldImagery = object : OnlineTileSourceBase(
-    "ESRI World Imagery",
+private fun esriTileSource(name: String, service: String) = object : OnlineTileSourceBase(
+    name,
     0,
     19,
     256,
     "",
-    arrayOf("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/"),
+    arrayOf("https://server.arcgisonline.com/ArcGIS/rest/services/$service/MapServer/tile/"),
     "Esri, Maxar, Earthstar Geographics, and the GIS User Community",
 ) {
     override fun getTileURLString(pMapTileIndex: Long): String =
@@ -914,17 +921,39 @@ private val EsriWorldImagery = object : OnlineTileSourceBase(
             MapTileIndex.getX(pMapTileIndex)
 }
 
+private val EsriWorldImagery = esriTileSource("ESRI World Imagery", "World_Imagery")
+
+/**
+ * Hybrid is the same imagery with ESRI's reference layers drawn over it; there
+ * is no single hybrid service to point at.
+ */
+private val EsriReferenceLayers = listOf(
+    esriTileSource("ESRI Boundaries and Places", "Reference/World_Boundaries_and_Places"),
+    esriTileSource("ESRI Transportation", "Reference/World_Transportation"),
+)
+
 @Composable
 private fun VehicleMap(
     vehicle: VehicleState,
     flyTarget: GeoPoint?,
     followUav: Boolean,
+    hybrid: Boolean,
     onMapTap: (GeoPoint) -> Unit,
 ) {
     val trail = remember { mutableListOf<GeoPoint>() }
     val context = LocalContext.current
     val planeIcon = remember(context) { planeMarkerIcon(context) }
     val homeIcon = remember(context) { ContextCompat.getDrawable(context, R.drawable.ic_home_marker) }
+    // Built once: each carries a tile provider and cache that should survive the
+    // overlay rebuild that happens on every telemetry update.
+    val referenceOverlays = remember(context) {
+        EsriReferenceLayers.map { source ->
+            TilesOverlay(MapTileProviderBasic(context, source), context).apply {
+                loadingBackgroundColor = android.graphics.Color.TRANSPARENT
+                loadingLineColor = android.graphics.Color.TRANSPARENT
+            }
+        }
+    }
     // The overlay is built once in factory, so it captures whatever handler was
     // current at that moment; this keeps it pointing at the latest one.
     val currentTap by rememberUpdatedState(onMapTap)
@@ -954,7 +983,16 @@ private fun VehicleMap(
         update = { map ->
             // Rebuilt every update, so it has to happen whether or not there is a
             // fix, otherwise the target marker would never refresh without one.
-            map.overlays.removeAll { it !is MapEventsOverlay }
+            map.overlays.removeAll { it !is MapEventsOverlay && it !is TilesOverlay }
+            referenceOverlays.forEach { overlay ->
+                val shown = map.overlays.contains(overlay)
+                if (hybrid && !shown) {
+                    // Index 0 keeps the labels under the aircraft and its trail.
+                    map.overlays.add(0, overlay)
+                } else if (!hybrid && shown) {
+                    map.overlays.remove(overlay)
+                }
+            }
             val homeLat = vehicle.homeLat
             val homeLon = vehicle.homeLon
             if (homeLat != null && homeLon != null) {

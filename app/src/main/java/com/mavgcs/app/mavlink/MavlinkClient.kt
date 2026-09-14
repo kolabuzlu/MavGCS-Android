@@ -426,10 +426,12 @@ class MavlinkClient {
                 if (payload.orientation().entry() != MavSensorOrientation.MAV_SENSOR_ROTATION_PITCH_270) {
                     current
                 } else {
+                    // Only zero means no reading. ArduPilot reports distances well
+                    // past max_distance -- that field is the configured range of
+                    // the sensor, not a cap on what it will send -- and discarding
+                    // those left the field blank for the whole flight.
                     val centimetres = payload.currentDistance()
-                    val maxCentimetres = payload.maxDistance()
-                    val usable = centimetres > 0 && (maxCentimetres <= 0 || centimetres <= maxCentimetres)
-                    current.copy(rangefinderM = if (usable) centimetres / 100f else null)
+                    current.copy(rangefinderM = if (centimetres > 0) centimetres / 100f else null)
                 }
             }
             is ScaledPressure -> _state.update {
