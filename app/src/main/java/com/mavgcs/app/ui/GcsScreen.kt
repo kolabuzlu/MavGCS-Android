@@ -97,6 +97,7 @@ import org.osmdroid.views.overlay.TilesOverlay
  * come from the height actually available instead of being fixed.
  */
 private data class LayoutMetrics(
+    val columnWidth: Dp,
     val outerPadding: Dp,
     val gap: Dp,
     val columnPadding: Dp,
@@ -110,9 +111,17 @@ private data class LayoutMetrics(
     val showSectionLabel: Boolean,
 )
 
-private fun metricsFor(available: Dp): LayoutMetrics =
-    if (available < 700.dp) {
+private fun metricsFor(width: Dp, height: Dp): LayoutMetrics {
+    // The control column earns more width on a wide screen; on a narrow one the
+    // map needs what is left. Height decides everything else.
+    val columnWidth = when {
+        width >= 1200.dp -> 500.dp
+        width >= 1050.dp -> 460.dp
+        else -> 420.dp
+    }
+    return if (height < 700.dp) {
         LayoutMetrics(
+            columnWidth = columnWidth,
             outerPadding = 8.dp,
             gap = 6.dp,
             columnPadding = 10.dp,
@@ -127,6 +136,7 @@ private fun metricsFor(available: Dp): LayoutMetrics =
         )
     } else {
         LayoutMetrics(
+            columnWidth = columnWidth,
             outerPadding = 12.dp,
             gap = 12.dp,
             columnPadding = 14.dp,
@@ -140,6 +150,7 @@ private fun metricsFor(available: Dp): LayoutMetrics =
             showSectionLabel = true,
         )
     }
+}
 
 @Composable
 fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
@@ -150,7 +161,8 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
     var showFlyDialog by remember { mutableStateOf(false) }
     var followUav by remember { mutableStateOf(true) }
     var hybridMap by remember { mutableStateOf(false) }
-    val metrics = metricsFor(LocalConfiguration.current.screenHeightDp.dp)
+    val configuration = LocalConfiguration.current
+    val metrics = metricsFor(configuration.screenWidthDp.dp, configuration.screenHeightDp.dp)
 
     Surface(modifier = Modifier.fillMaxSize(), color = scheme.background) {
         Row(
@@ -161,7 +173,7 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
         ) {
             Column(
                 modifier = Modifier
-                    .width(420.dp)
+                    .width(metrics.columnWidth)
                     .fillMaxHeight()
                     .clip(RoundedCornerShape(16.dp))
                     .background(scheme.surface)
