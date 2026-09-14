@@ -125,7 +125,6 @@ private data class LayoutMetrics(
     val gridLabel: TextUnit,
     val gridValue: TextUnit,
     val gridRowGap: Dp,
-    val showSectionLabel: Boolean,
 )
 
 private fun metricsFor(width: Dp, height: Dp): LayoutMetrics {
@@ -149,7 +148,6 @@ private fun metricsFor(width: Dp, height: Dp): LayoutMetrics {
             gridLabel = 8.sp,
             gridValue = 12.sp,
             gridRowGap = 6.dp,
-            showSectionLabel = false,
         )
     } else {
         LayoutMetrics(
@@ -164,7 +162,6 @@ private fun metricsFor(width: Dp, height: Dp): LayoutMetrics {
             gridLabel = 9.sp,
             gridValue = 14.sp,
             gridRowGap = 10.dp,
-            showSectionLabel = true,
         )
     }
 }
@@ -632,9 +629,6 @@ private fun ArmPad(
     onCommand: (GcsCommand) -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
-    if (metrics.showSectionLabel) {
-        Text("COMMANDS", fontWeight = FontWeight.Bold, color = scheme.primary)
-    }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(metrics.controlGap)) {
         // Red marks the state the vehicle is actually in, not the action the
         // button performs, so a glance says whether the props are live.
