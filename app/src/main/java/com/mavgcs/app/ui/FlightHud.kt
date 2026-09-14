@@ -58,6 +58,12 @@ private val hudLabelStyle = TextStyle(
 )
 
 /**
+ * The sliding scale numbers are context, not the reading, so they are drawn at
+ * half strength. The value in the pointer box keeps the full weight.
+ */
+private val hudScaleStyle = hudLabelStyle.copy(color = HudTextColor.copy(alpha = 0.5f))
+
+/**
  * The desktop HUD: a full-width artificial horizon with an airspeed tape on the
  * left, an altitude tape on the right, a heading strip along the top, and the
  * battery and position readouts overlaid at the corners.
@@ -230,7 +236,7 @@ private fun DrawScope.drawVerticalTape(
             strokeWidth = 1.5f,
         )
         if (labelled && tick >= 0f) {
-            val text = measurer.measure(AnnotatedString(tick.roundToInt().toString()), hudLabelStyle)
+            val text = measurer.measure(AnnotatedString(tick.roundToInt().toString()), hudScaleStyle)
             val textX = if (onLeft) left + 3f else left + width - text.size.width - 3f
             drawText(textLayoutResult = text, topLeft = Offset(textX, y - text.size.height / 2f))
         }
