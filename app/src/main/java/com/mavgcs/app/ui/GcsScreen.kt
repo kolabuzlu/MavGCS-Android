@@ -24,6 +24,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.text.KeyboardOptions
@@ -195,6 +197,7 @@ private fun metricsFor(width: Dp, height: Dp): LayoutMetrics {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
     val vehicle by viewModel.vehicle.collectAsStateWithLifecycle()
@@ -433,15 +436,26 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                             }
                         },
                     )
-                    // One row across the top of the map. Hybrid is pushed to
-                    // the far edge: it picks the imagery, where the rest act on
-                    // what is drawn over it.
-                    Row(
+                    // One row across the top of the map, wrapping to a second
+                    // if it has to. Laid out as a plain Row it simply ran off the
+                    // end once a mission was being entered and the queue controls
+                    // appeared, and what fell off was the last thing in the line:
+                    // Hybrid, squeezed until its label broke in half.
+                    //
+                    // Hybrid is not in it at all now, so it cannot be pushed
+                    // about by what the row happens to contain. The row keeps
+                    // clear of it by its measured width rather than a guessed
+                    // one, which holds if the label or the font scale changes.
+                    var hybridWidthPx by remember { mutableStateOf(0) }
+                    val hybridReserve = with(LocalDensity.current) { hybridWidthPx.toDp() }
+                    FlowRow(
                         modifier = Modifier
                             .align(Alignment.TopStart)
                             .fillMaxWidth()
-                            .padding(8.dp),
+                            .padding(8.dp)
+                            .padding(end = hybridReserve + 8.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         MapToggle("Follow UAV", followUav) { followUav = !followUav }
                         MapToggle("Vectors", showGuides) { showGuides = !showGuides }
@@ -477,9 +491,15 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                                 viewModel.clearMission()
                             },
                         )
-                        Spacer(Modifier.weight(1f))
-                        MapToggle("Hybrid", hybridMap) { hybridMap = !hybridMap }
                     }
+                    MapSwitch(
+                        label = "Hybrid",
+                        on = hybridMap,
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(8.dp)
+                            .onSizeChanged { hybridWidthPx = it.width },
+                    ) { hybridMap = !hybridMap }
                     Column(
                         modifier = Modifier
                             .align(Alignment.BottomStart)
@@ -746,6 +766,41 @@ private fun MapButton(label: String, modifier: Modifier = Modifier, onClick: () 
     ) {
         // Accented rather than boxed: this one acts instead of holding a state.
         Text(label, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = scheme.primary)
+    }
+}
+
+/**
+ * An on/off toggle: the control itself lights up rather than carrying a tick.
+ *
+ * Hybrid picks which imagery the map draws, where every other control in this
+ * row acts on what is drawn over it, so it reads as a different kind of thing.
+ * Losing the tick box also makes it the narrowest control in the row, which is
+ * what stopped it being the one squeezed off the end.
+ */
+@Composable
+private fun MapSwitch(
+    label: String,
+    on: Boolean,
+    modifier: Modifier = Modifier,
+    onToggle: () -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (on) scheme.primary else scheme.surface.copy(alpha = 0.9f))
+            .clickable(onClick = onToggle)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            fontSize = 12.sp,
+            fontWeight = if (on) FontWeight.Medium else FontWeight.Normal,
+            // Dimmed when off, so the state reads from across the cockpit
+            // rather than only on inspection.
+            color = if (on) scheme.onPrimary else scheme.onSurfaceVariant,
+        )
     }
 }
 
