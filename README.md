@@ -23,3 +23,9 @@ Supports RFD and similar telemetry radios or MAVLink over ELRS.
 You can monitor HUD and vital information about flight, use weather radar, see the vehicle on the moving map, view terrain radar, execute instant waypoint missions, and more.
 
 Created by **Derin Hakan Karakurt**
+
+### Installing & Running MavGCS (Windows)
+
+Download `MavGCS-<version>.apk` from the
+[Releases page](https://github.com/kolabuzlu/MavGCS-Android/releases), install it,
+and run the app.
