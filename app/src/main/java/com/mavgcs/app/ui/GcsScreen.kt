@@ -903,6 +903,9 @@ private fun ModeButton(
     }
 }
 
+/** Where the map sits until the first position fix arrives. */
+private val DEFAULT_CENTRE = GeoPoint(39.92502382797436, 32.83690999712254)
+
 /** Opening zoom, set in one place so the factory and the first fix agree. */
 private const val DEFAULT_ZOOM = 16.0
 
@@ -1077,7 +1080,7 @@ private fun VehicleMap(
                 setTileSource(EsriWorldImagery)
                 setMultiTouchControls(true)
                 controller.setZoom(DEFAULT_ZOOM)
-                controller.setCenter(GeoPoint(37.3349, -122.0090))
+                controller.setCenter(DEFAULT_CENTRE)
                 overlays.add(
                     MapEventsOverlay(
                         object : MapEventsReceiver {
