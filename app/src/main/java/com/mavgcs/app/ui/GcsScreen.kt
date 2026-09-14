@@ -101,6 +101,8 @@ import com.mavgcs.app.mavlink.GcsCommand
 import com.mavgcs.app.mavlink.GuidedAction
 import com.mavgcs.app.mavlink.LinkType
 import com.mavgcs.app.mavlink.PlaneModeButton
+import com.mavgcs.app.adsb.AdsbContact
+import com.mavgcs.app.adsb.AdsbProvider
 import com.mavgcs.app.cache.MapTileCache
 import com.mavgcs.app.mavlink.MissionWaypoint
 import com.mavgcs.app.mavlink.TelemetrySettings
@@ -113,8 +115,10 @@ import kotlin.math.asin
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
+import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import kotlin.math.sqrt
 import kotlinx.coroutines.delay
 import org.osmdroid.tileprovider.MapTileProviderBasic
 import org.osmdroid.tileprovider.tilesource.ITileSource
@@ -226,6 +230,31 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
     // Bumped to ask the map to drop its trail; the map owns the points.
     var clearTrailToken by remember { mutableStateOf(0) }
     var showWeather by remember { mutableStateOf(false) }
+    var showAdsb by remember { mutableStateOf(false) }
+    var adsbContacts by remember { mutableStateOf<List<AdsbContact>>(emptyList()) }
+
+    // Read inside the loop rather than keyed on, so the poll runs to its own
+    // clock instead of restarting every time a position arrives.
+    val adsbCentre = rememberUpdatedState(vehicle.lat to vehicle.lon)
+    LaunchedEffect(showAdsb) {
+        if (!showAdsb) {
+            adsbContacts = emptyList()
+            return@LaunchedEffect
+        }
+        while (true) {
+            val (lat, lon) = adsbCentre.value
+            if (lat != null && lon != null) {
+                // Switching the layer off cancels this coroutine, so a reply
+                // that lands afterwards is simply never applied: nothing is
+                // left painted on a map whose box has been unticked.
+                val found = AdsbProvider.around(lat, lon)
+                adsbContacts = found.filter {
+                    metresBetween(lat, lon, it.lat, it.lon) <= ADSB_RADIUS_METRES
+                }
+            }
+            delay(ADSB_REFRESH_MS)
+        }
+    }
     var radarFrame by remember { mutableStateOf<RadarFrame?>(null) }
 
     // Frames age out of RainViewer's index, so the newest one has to be
@@ -394,6 +423,7 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                             ?.plus(waypointQueue.size),
                         onWaypointTap = { editingWaypoint = it },
                         radarTiles = radarTiles,
+                        adsbContacts = adsbContacts,
                         onMapTap = { point ->
                             if (queueWaypoints) {
                                 waypointQueue.add(QueuedWaypoint(point))
@@ -417,6 +447,7 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                         MapToggle("Vectors", showGuides) { showGuides = !showGuides }
                         MapButton("Clear Trail") { clearTrailToken++ }
                         MapToggle("Weather", showWeather) { showWeather = !showWeather }
+                        MapToggle("ADS-B", showAdsb) { showAdsb = !showAdsb }
                         MissionControls(
                             queueing = queueWaypoints,
                             queued = waypointQueue.size,
@@ -1862,6 +1893,18 @@ private val DEFAULT_CENTRE = GeoPoint(39.92502382797436, 32.83690999712254)
 private const val DEFAULT_ZOOM = 16.0
 
 /** How far around the aircraft the radar is drawn. */
+/** Contacts are drawn no further out than the weather is, and for the same reason. */
+private const val ADSB_RADIUS_METRES = 50_000.0
+
+/** Fresh enough that contacts visibly track rather than jump between positions. */
+private const val ADSB_REFRESH_MS = 5_000L
+
+/** The aeroplane sits in the upper part of its icon; the callsign hangs below. */
+private const val ADSB_ICON_DP = 34
+private const val ADSB_ANCHOR_V = 0.5f / 1.35f
+
+private val AdsbPlaneColor = Color(0xFFFF2E63)
+
 private const val WEATHER_RADIUS_METRES = 50_000.0
 private const val WEATHER_REFRESH_MS = 5L * 60L * 1000L
 
@@ -2044,6 +2087,78 @@ private const val WAYPOINT_ICON_DP = 24
  * A numbered disc for one mission waypoint. Drawn rather than shipped, because
  * the number is the point's own place in the run and cannot be known up front.
  */
+/**
+ * A contact, drawn as an airliner seen from above.
+ *
+ * The silhouette is the desktop's, and it is a silhouette rather than an arrow
+ * because a small arrow leaves the direction ambiguous at a glance. It turns to
+ * the aircraft's track; the callsign under it deliberately does not, since
+ * upside-down text is no use to anybody.
+ */
+private fun adsbIcon(context: Context, contact: AdsbContact): Drawable {
+    val side = ADSB_ICON_DP * context.resources.displayMetrics.density
+    val height = side * 1.35f
+    val bitmap = Bitmap.createBitmap(side.toInt(), height.toInt(), Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+    val centre = side / 2f
+    val scale = side / 24f          // the shape is drawn in a 24 unit box
+
+    canvas.save()
+    canvas.rotate((contact.trackDeg ?: 0.0).toFloat(), centre, centre)
+    fun x(v: Float) = centre + v * scale
+    fun y(v: Float) = centre + v * scale
+    val plane = Path().apply {
+        moveTo(x(0f), y(-11f))
+        cubicTo(x(1.1f), y(-11f), x(1.7f), y(-9.6f), x(1.7f), y(-8f))
+        lineTo(x(1.7f), y(-4.2f)); lineTo(x(10.5f), y(1.6f)); lineTo(x(10.5f), y(4f))
+        lineTo(x(1.7f), y(1.6f)); lineTo(x(1.7f), y(6.4f)); lineTo(x(4.6f), y(8.6f))
+        lineTo(x(4.6f), y(10.4f)); lineTo(x(0f), y(9.2f)); lineTo(x(-4.6f), y(10.4f))
+        lineTo(x(-4.6f), y(8.6f)); lineTo(x(-1.7f), y(6.4f)); lineTo(x(-1.7f), y(1.6f))
+        lineTo(x(-10.5f), y(4f)); lineTo(x(-10.5f), y(1.6f)); lineTo(x(-1.7f), y(-4.2f))
+        lineTo(x(-1.7f), y(-8f))
+        cubicTo(x(-1.7f), y(-9.6f), x(-1.1f), y(-11f), x(0f), y(-11f))
+        close()
+    }
+    canvas.drawPath(
+        plane,
+        Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AdsbPlaneColor.toArgb() },
+    )
+    canvas.drawPath(
+        plane,
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 0.9f * scale
+            strokeJoin = Paint.Join.ROUND
+            color = android.graphics.Color.WHITE
+        },
+    )
+    canvas.restore()
+
+    canvas.drawText(
+        contact.callsign,
+        centre,
+        height - side * 0.06f,
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.WHITE
+            textAlign = Paint.Align.CENTER
+            textSize = side * 0.29f
+            isFakeBoldText = true
+            setShadowLayer(side * 0.09f, 0f, 0f, android.graphics.Color.BLACK)
+        },
+    )
+    return BitmapDrawable(context.resources, bitmap)
+}
+
+/** Great-circle distance in metres, for deciding what is near enough to draw. */
+private fun metresBetween(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+    val earthRadiusM = 6_371_000.0
+    val dLat = Math.toRadians(lat2 - lat1)
+    val dLon = Math.toRadians(lon2 - lon1)
+    val a = sin(dLat / 2).pow(2) +
+        cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2)) * sin(dLon / 2).pow(2)
+    return 2 * earthRadiusM * asin(sqrt(a).coerceIn(0.0, 1.0))
+}
+
 private fun waypointIcon(
     context: Context,
     number: Int,
@@ -2202,6 +2317,7 @@ private fun VehicleMap(
     activeWaypoint: Int?,
     onWaypointTap: (Int) -> Unit,
     radarTiles: List<RadarTile>,
+    adsbContacts: List<AdsbContact>,
     onMapTap: (GeoPoint) -> Unit,
 ) {
     val trail = remember { mutableListOf<GeoPoint>() }
@@ -2212,6 +2328,13 @@ private fun VehicleMap(
     val planeIcon = remember(context) { planeMarkerIcon(context) }
     val homeIcon = remember(context) { homeMarkerIcon(context) }
     val flyTargetIcon = remember(context) { context.getDrawable(R.drawable.ic_fly_target) }
+    // Keyed on the contact list, so these are drawn when a poll lands rather
+    // than in the update lambda below, which runs on every telemetry frame: a
+    // bitmap per contact per frame is a great deal of allocation for a picture
+    // that only changes every few seconds.
+    val adsbIcons = remember(adsbContacts, context) {
+        adsbContacts.associate { it.key to adsbIcon(context, it) }
+    }
     // The update lambda runs on every telemetry tick, so these are built
     // once per number rather than once per frame.
     val waypointIcons = remember(context) { mutableMapOf<String, Drawable>() }
@@ -2350,6 +2473,23 @@ private fun VehicleMap(
                         3.5f,
                         dashed = true,
                     )
+                }
+                // Added before our own aircraft so they sit under it: ours
+                // is the one that matters, and a contact passing over it must
+                // not be what hides it.
+                adsbContacts.forEach { contact ->
+                    map.overlays += Marker(map).apply {
+                        position = GeoPoint(contact.lat, contact.lon)
+                        icon = adsbIcons[contact.key]
+                        // Anchored on the aeroplane itself, not on the label
+                        // hanging under it.
+                        setAnchor(Marker.ANCHOR_CENTER, ADSB_ANCHOR_V)
+                        // No info window, and the tap is swallowed: osmdroid
+                        // would otherwise pan the map to fit one, which reads
+                        // as the map lurching when a contact is brushed.
+                        infoWindow = null
+                        setOnMarkerClickListener { _, _ -> true }
+                    }
                 }
                 map.overlays += Marker(map).apply {
                     position = point
