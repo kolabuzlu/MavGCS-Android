@@ -71,7 +71,6 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mavgcs.app.R
@@ -969,6 +968,20 @@ private fun predictedTrack(
     return points
 }
 
+private const val HOME_ICON_DP = 36
+
+/** The home badge, scaled once the same way the aircraft marker is. */
+private fun homeMarkerIcon(context: Context): Drawable {
+    val source = BitmapFactory.decodeResource(context.resources, R.drawable.homeicon)
+    val widthPx = (HOME_ICON_DP * context.resources.displayMetrics.density).toInt()
+    val heightPx = (widthPx.toLong() * source.height / source.width).toInt()
+    val scaled = Bitmap.createScaledBitmap(source, widthPx, heightPx, true)
+    if (scaled !== source) {
+        source.recycle()
+    }
+    return BitmapDrawable(context.resources, scaled)
+}
+
 private const val PLANE_ICON_DP = 96
 
 /**
@@ -1032,7 +1045,7 @@ private fun VehicleMap(
     val trail = remember { mutableListOf<GeoPoint>() }
     val context = LocalContext.current
     val planeIcon = remember(context) { planeMarkerIcon(context) }
-    val homeIcon = remember(context) { ContextCompat.getDrawable(context, R.drawable.ic_home_marker) }
+    val homeIcon = remember(context) { homeMarkerIcon(context) }
     // Polyline paints through the android Paint API, so the themed colour has to
     // be resolved to an int out here rather than read inside the update lambda.
     val trailColor = MaterialTheme.colorScheme.error.toArgb()
@@ -1094,7 +1107,7 @@ private fun VehicleMap(
                 map.overlays += Marker(map).apply {
                     position = GeoPoint(homeLat, homeLon)
                     icon = homeIcon
-                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                     title = "Home"
                 }
             }
