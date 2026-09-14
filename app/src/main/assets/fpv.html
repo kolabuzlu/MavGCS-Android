@@ -47,8 +47,11 @@
   }
   .cesium-widget-credits {
       position:fixed !important;
-      /* The true gap between the VIBE flag and the FPV switch. */
-      left:calc(50% + 52px) !important; right:100px !important; bottom:2px !important;
+      /* The true gap between the VIBE flag and the FPV switch, measured off
+         the panel: the flag ends at 285 and the switch starts at 371, and
+         this spans 288 to 372. Lifted so the three lines sit centred on the
+         flags' own middle rather than along the bottom edge. */
+      left:calc(50% + 52px) !important; right:100px !important; bottom:7px !important;
       /* Small enough that the whole notice fits across two lines. The text is
          set in full on purpose: it is Cesium's, the free tier requires it, and
          a credit chopped off mid-word is worse than a small one. */
@@ -57,7 +60,7 @@
       display:block !important;
       white-space:normal !important;
       overflow:visible;
-      text-align:left;
+      text-align:center;
   }
   /* Each part on its own block. As inline runs they share a line box with the
      logo container, and even pinned out of flow it still lends that first line
