@@ -46,7 +46,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 import kotlin.math.asin
+import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.hypot
 import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.roundToInt
@@ -345,12 +347,26 @@ class MavlinkClient {
                     // -180..180. Wrapped to a compass bearing like the heading
                     // and wind fields; roll and pitch stay signed, as they should.
                     yawDeg = normaliseBearing(Math.toDegrees(payload.yaw().toDouble()).toFloat()),
+                    yawRateDegSec = Math.toDegrees(payload.yawspeed().toDouble()).toFloat(),
                 )
             }
             is GlobalPositionInt -> _state.update {
                 val lat = payload.lat() / 1e7
                 val lon = payload.lon() / 1e7
+                // Course comes from the velocity, not the heading: in a crosswind
+                // the aircraft points one way and travels another.
+                val northMs = payload.vx() / 100f
+                val eastMs = payload.vy() / 100f
+                val overGround = hypot(northMs, eastMs)
                 it.copy(
+                    groundCourseDeg = if (overGround >= MIN_COURSE_SPEED_MS) {
+                        normaliseBearing(
+                            Math.toDegrees(atan2(eastMs.toDouble(), northMs.toDouble())).toFloat(),
+                        )
+                    } else {
+                        // Below walking pace the direction is noise; keep the last.
+                        it.groundCourseDeg
+                    },
                     lat = lat,
                     lon = lon,
                     altMslM = payload.alt() / 1000f,
@@ -631,6 +647,7 @@ class MavlinkClient {
         private const val REPOSITION_CHANGE_MODE = 1
         private const val HOME_POSITION_MESSAGE_ID = 242
         private const val HEARTBEAT_INTERVAL_MS = 1000L
+        private const val MIN_COURSE_SPEED_MS = 1f
     }
 }
 

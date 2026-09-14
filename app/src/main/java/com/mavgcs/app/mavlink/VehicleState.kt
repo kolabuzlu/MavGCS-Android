@@ -23,6 +23,10 @@ data class VehicleState(
     val groundSpeedMs: Float? = null,
     val airSpeedMs: Float? = null,
     val headingDeg: Float? = null,
+    /** Course over ground, which parts from heading in any crosswind. */
+    val groundCourseDeg: Float? = null,
+    /** Yaw rate, positive to the right; the arc of the predicted track. */
+    val yawRateDegSec: Float = 0f,
     val throttlePct: Int? = null,
     val climbMs: Float? = null,
     val gpsFix: String = "NO GPS",

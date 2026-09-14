@@ -80,6 +80,10 @@ import com.mavgcs.app.mavlink.GuidedAction
 import com.mavgcs.app.mavlink.LinkType
 import com.mavgcs.app.mavlink.PlaneModeButton
 import com.mavgcs.app.mavlink.VehicleState
+import kotlin.math.asin
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.sin
 import org.osmdroid.tileprovider.MapTileProviderBasic
 import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
 import org.osmdroid.events.MapEventsReceiver
@@ -162,6 +166,7 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
     var showFlyDialog by remember { mutableStateOf(false) }
     var followUav by remember { mutableStateOf(true) }
     var hybridMap by remember { mutableStateOf(false) }
+    var showGuides by remember { mutableStateOf(true) }
     val configuration = LocalConfiguration.current
     val metrics = metricsFor(configuration.screenWidthDp.dp, configuration.screenHeightDp.dp)
 
@@ -246,6 +251,7 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                         flyTarget = flyTarget,
                         followUav = followUav,
                         hybrid = hybridMap,
+                        showGuides = showGuides,
                         onMapTap = { flyTarget = it },
                     )
                     Column(
@@ -254,6 +260,7 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                     ) {
                         MapToggle("Follow UAV", followUav) { followUav = !followUav }
                         MapToggle("Hybrid", hybridMap) { hybridMap = !hybridMap }
+                        MapToggle("Nav Lines", showGuides) { showGuides = !showGuides }
                     }
                     MapCoordinates(
                         lat = vehicle.lat,
@@ -894,6 +901,65 @@ private fun ModeButton(
     }
 }
 
+/** Seconds of flight the predictive lines reach ahead of the aircraft. */
+private const val GUIDE_HORIZON_SECONDS = 10.0
+private const val GUIDE_MIN_METRES = 60.0
+private const val GUIDE_MAX_METRES = 600.0
+private const val TRACK_STEPS = 24
+
+/** The heading line overshoots the others so its tip stays visible. */
+private const val HEADING_REACH_FACTOR = 1.25
+
+private val HeadingLineColor = Color(0xFFFFD54F)
+private val GroundTrackColor = Color(0xFF4FC3F7)
+private val TrajectoryColor = Color(0xFFE040FB)
+
+private fun guideLine(points: List<GeoPoint>, argb: Int, widthPx: Float): Polyline =
+    Polyline().apply {
+        setPoints(points)
+        outlinePaint.color = argb
+        outlinePaint.strokeWidth = widthPx
+        outlinePaint.strokeCap = Paint.Cap.ROUND
+    }
+
+/** The point [distanceM] from [from] along [bearingDeg], on a spherical earth. */
+private fun destination(from: GeoPoint, bearingDeg: Float, distanceM: Double): GeoPoint {
+    val earthRadiusM = 6_371_000.0
+    val angular = distanceM / earthRadiusM
+    val bearing = Math.toRadians(bearingDeg.toDouble())
+    val lat = Math.toRadians(from.latitude)
+    val lon = Math.toRadians(from.longitude)
+    val lat2 = asin(sin(lat) * cos(angular) + cos(lat) * sin(angular) * cos(bearing))
+    val lon2 = lon + atan2(
+        sin(bearing) * sin(angular) * cos(lat),
+        cos(angular) - sin(lat) * sin(lat2),
+    )
+    return GeoPoint(Math.toDegrees(lat2), Math.toDegrees(lon2))
+}
+
+/**
+ * Where the aircraft ends up if it holds this turn rate: the course is advanced
+ * a step at a time, so a steady bank draws an arc and wings level draws a line.
+ */
+private fun predictedTrack(
+    from: GeoPoint,
+    courseDeg: Float,
+    groundSpeedMs: Double,
+    turnRateDegSec: Float,
+): List<GeoPoint> {
+    val step = GUIDE_HORIZON_SECONDS / TRACK_STEPS
+    val leg = (groundSpeedMs * step).coerceAtLeast(GUIDE_MIN_METRES / TRACK_STEPS)
+    var course = courseDeg
+    var here = from
+    val points = mutableListOf(from)
+    repeat(TRACK_STEPS) {
+        course += (turnRateDegSec * step).toFloat()
+        here = destination(here, course, leg)
+        points += here
+    }
+    return points
+}
+
 private const val PLANE_ICON_DP = 96
 
 /**
@@ -951,6 +1017,7 @@ private fun VehicleMap(
     flyTarget: GeoPoint?,
     followUav: Boolean,
     hybrid: Boolean,
+    showGuides: Boolean,
     onMapTap: (GeoPoint) -> Unit,
 ) {
     val trail = remember { mutableListOf<GeoPoint>() }
@@ -960,6 +1027,9 @@ private fun VehicleMap(
     // Polyline paints through the android Paint API, so the themed colour has to
     // be resolved to an int out here rather than read inside the update lambda.
     val trailColor = MaterialTheme.colorScheme.error.toArgb()
+    val headingColor = HeadingLineColor.toArgb()
+    val courseColor = GroundTrackColor.toArgb()
+    val trajectoryColor = TrajectoryColor.toArgb()
     // Built once: each carries a tile provider and cache that should survive the
     // overlay rebuild that happens on every telemetry update.
     val referenceOverlays = remember(context) {
@@ -1035,6 +1105,31 @@ private fun VehicleMap(
                         outlinePaint.color = trailColor
                         outlinePaint.strokeCap = Paint.Cap.ROUND
                     }
+                }
+                if (showGuides) {
+                    val overGround = (vehicle.groundSpeedMs ?: 0f).toDouble()
+                    val reach = (overGround * GUIDE_HORIZON_SECONDS)
+                        .coerceIn(GUIDE_MIN_METRES, GUIDE_MAX_METRES)
+                    val heading = vehicle.headingDeg ?: vehicle.yawDeg
+                    val course = vehicle.groundCourseDeg ?: heading
+                    // In still air the three nearly coincide, so they are drawn
+                    // widest first and thinnest last, and the heading reaches a
+                    // little further, leaving each one readable over the others.
+                    map.overlays += guideLine(
+                        predictedTrack(point, course, overGround, vehicle.yawRateDegSec),
+                        trajectoryColor,
+                        7f,
+                    )
+                    map.overlays += guideLine(
+                        listOf(point, destination(point, course, reach)),
+                        courseColor,
+                        4.5f,
+                    )
+                    map.overlays += guideLine(
+                        listOf(point, destination(point, heading, reach * HEADING_REACH_FACTOR)),
+                        headingColor,
+                        2.5f,
+                    )
                 }
                 map.overlays += Marker(map).apply {
                     position = point
