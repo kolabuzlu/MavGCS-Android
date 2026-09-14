@@ -20,7 +20,7 @@ It works with **Ardupilot**, **PX4** (Bi-directional) or **INAV** (Uni-direction
 
 Supports MAVLink over ELRS and LTE telemetry.
 
-You can monitor HUD and vital information about flight, use weather radar, see the vehicle on the moving map, view terrain radar, execute instant waypoint missions, and more.
+You can monitor HUD and vital information about flight, use weather radar, experience 3D FPV view, see the vehicle on the moving map, view terrain radar, execute instant waypoint missions, and more.
 
 This app is optimized for 12.7" Android tablets.
 
