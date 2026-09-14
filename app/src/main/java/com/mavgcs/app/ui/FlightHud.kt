@@ -4,6 +4,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -62,11 +63,14 @@ private val hudLabelStyle = TextStyle(
 @Composable
 fun FlightHud(vehicle: VehicleState, modifier: Modifier = Modifier) {
     val measurer = rememberTextMeasurer()
-    Box(
+    BoxWithConstraints(
         modifier = modifier
             .clip(RoundedCornerShape(10.dp))
             .background(Color.Black),
     ) {
+        // On a short tablet the HUD shrinks enough that the battery block and the
+        // position readouts collide, so the overlays tighten with it.
+        val compact = maxHeight < 130.dp
         Canvas(modifier = Modifier.fillMaxSize()) {
             drawHorizon(vehicle.rollDeg, vehicle.pitchDeg, measurer)
             drawVerticalTape(
@@ -92,28 +96,28 @@ fun FlightHud(vehicle: VehicleState, modifier: Modifier = Modifier) {
             text = "IAS m/s",
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .padding(start = 4.dp, bottom = 22.dp),
+                .padding(start = 4.dp, bottom = if (compact) 15.dp else 22.dp),
         )
         HudCaption(
             text = "ALT m",
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = 4.dp, bottom = 22.dp),
+                .padding(end = 4.dp, bottom = if (compact) 15.dp else 22.dp),
         )
 
         // Battery, where the desktop HUD keeps it.
         Column(
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(top = 24.dp, end = 54.dp)
+                .padding(top = if (compact) 10.dp else 24.dp, end = 54.dp)
                 .clip(RoundedCornerShape(6.dp))
                 .background(TapeBackground)
-                .padding(horizontal = 8.dp, vertical = 5.dp),
-            verticalArrangement = Arrangement.spacedBy(1.dp),
+                .padding(horizontal = 6.dp, vertical = if (compact) 2.dp else 5.dp),
+            verticalArrangement = Arrangement.spacedBy(if (compact) 0.dp else 1.dp),
         ) {
-            HudReadout(vehicle.batteryV.oneDecimal(), "V")
-            HudReadout(vehicle.batteryA.oneDecimal(), "A")
-            HudReadout(vehicle.batteryRemainingPct?.toString() ?: NO_VALUE, "%")
+            HudReadout(vehicle.batteryV.oneDecimal(), "V", compact)
+            HudReadout(vehicle.batteryA.oneDecimal(), "A", compact)
+            HudReadout(vehicle.batteryRemainingPct?.toString() ?: NO_VALUE, "%", compact)
         }
 
         Row(
@@ -135,10 +139,19 @@ private fun HudCaption(text: String, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun HudReadout(value: String, unit: String) {
+private fun HudReadout(value: String, unit: String, compact: Boolean) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(text = value, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = HudTextColor)
-        Text(text = " $unit", fontSize = 9.sp, color = HudTextColor.copy(alpha = 0.7f))
+        Text(
+            text = value,
+            fontSize = if (compact) 9.sp else 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = HudTextColor,
+        )
+        Text(
+            text = " $unit",
+            fontSize = if (compact) 7.sp else 9.sp,
+            color = HudTextColor.copy(alpha = 0.7f),
+        )
     }
 }
 
