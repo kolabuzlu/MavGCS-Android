@@ -110,8 +110,12 @@ fun FlightHud(vehicle: VehicleState, modifier: Modifier = Modifier) {
         // Battery, where the desktop HUD keeps it.
         Column(
             modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(top = HeadingStripHeight + if (compact) 3.dp else 8.dp, end = 54.dp)
+                // Centred in the band between the heading strip and the bottom
+                // edge. Padding the top by the strip height and then centring
+                // shifts the content down by half of it, which lands it in the
+                // middle of what is left whatever height the HUD ends up.
+                .align(Alignment.CenterEnd)
+                .padding(top = HeadingStripHeight, end = 54.dp)
                 .clip(RoundedCornerShape(6.dp))
                 .background(TapeBackground)
                 .padding(horizontal = 6.dp, vertical = if (compact) 2.dp else 5.dp),
