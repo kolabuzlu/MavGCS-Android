@@ -9,9 +9,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -61,6 +63,22 @@ private const val PITCH_HALF_RANGE_DEG = 35f
 
 /** Height of the heading strip. The battery block is placed clear of it. */
 private val HeadingStripHeight = 18.dp
+
+/**
+ * How far inside the horizon's own edge the two corner blocks sit, and how far
+ * below the heading strip, so the pair line up with each other.
+ */
+private val CornerInset = 6.dp
+
+/**
+ * The battery block's first column, wide enough for the longest pack voltage.
+ *
+ * Both of its rows start with one of these, right aligned, which is what puts
+ * the per cent sign directly under the V above it. Aligning the figures
+ * instead would not do it: they are different lengths, so the units would
+ * wander.
+ */
+private val BatteryUnitColumn = 44.dp
 
 /** The wind readout, in the corner the desktop HUD keeps it. */
 private val WindArrowHalf = 11.dp
@@ -168,44 +186,71 @@ fun FlightHud(vehicle: VehicleState, modifier: Modifier = Modifier) {
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .padding(
-                    start = TapeWidth + ThrottleBarWidth + 6.dp,
-                    top = HeadingStripHeight + 6.dp,
+                    start = TapeWidth + ThrottleBarWidth + CornerInset,
+                    top = HeadingStripHeight + CornerInset,
                 ),
         )
 
-        // Battery, where the desktop HUD keeps it.
+        // Battery, in the corner opposite the wind. Two short rows rather
+        // than one long one or a tall stack: stacked it reached past the
+        // middle and fouled the vertical speed figure, and strung out in a
+        // single line it ran most of the way across the horizon.
+        //
+        // What is measured goes on top and what is chosen goes beneath, which
+        // also happens to be the more even split of the two.
         Column(
             modifier = Modifier
-                // Centred in the band between the heading strip and the bottom
-                // edge. Padding the top by the strip height and then centring
-                // shifts the content down by half of it, which lands it in the
-                // middle of what is left whatever height the HUD ends up.
-                .align(Alignment.CenterEnd)
+                .align(Alignment.TopEnd)
                 .padding(
-                    top = HeadingStripHeight,
-                    // Still clear of the vertical speed column and its readout,
-                    // just sitting a little closer to them.
-                    end = 46.dp + VsiBarWidth + VsiReadoutWidth,
+                    top = HeadingStripHeight + CornerInset,
+                    end = TapeWidth + VsiBarWidth + CornerInset,
                 )
+                // As wide as the longer row needs, so the shorter one has a
+                // width to spread itself across rather than trailing off.
+                .width(IntrinsicSize.Max)
                 .clip(RoundedCornerShape(6.dp))
                 .background(TapeBackground)
-                .padding(horizontal = 6.dp, vertical = if (compact) 2.dp else 5.dp),
-            verticalArrangement = Arrangement.spacedBy(if (compact) 0.dp else 1.dp),
+                .padding(horizontal = 6.dp, vertical = if (compact) 2.dp else 4.dp),
+            verticalArrangement = Arrangement.spacedBy(if (compact) 1.dp else 3.dp),
         ) {
-            HudReadout(vehicle.batteryV.oneDecimal(), "V", compact)
-            // Per cell, which is the number that says how much is really left:
-            // a pack reads healthy long after its cells have sagged.
-            HudReadout(vehicle.batteryV?.div(cells).twoDecimals(), "V/C", compact)
-            HudReadout(vehicle.batteryA.oneDecimal(), "A", compact)
-            HudReadout(vehicle.batteryRemainingPct?.toString() ?: NO_VALUE, "%", compact)
-            CellCountSelector(
-                cells = cells,
-                compact = compact,
-                onSelect = {
-                    cells = it
-                    saveCellCount(context, it)
-                },
-            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(if (compact) 5.dp else 9.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier.width(BatteryUnitColumn),
+                    contentAlignment = Alignment.CenterEnd,
+                ) {
+                    HudReadout(vehicle.batteryV.oneDecimal(), "V", compact)
+                }
+                // Per cell, which is the number that says how much is really
+                // left: a pack reads healthy long after its cells have sagged.
+                HudReadout(vehicle.batteryV?.div(cells).twoDecimals(), "V/C", compact)
+                HudReadout(vehicle.batteryA.oneDecimal(), "A", compact)
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                // The per cent keeps its column, under the V above it, and the
+                // selector goes to the far edge: between them is the only
+                // slack in the block, so that is where it belongs.
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier.width(BatteryUnitColumn),
+                    contentAlignment = Alignment.CenterEnd,
+                ) {
+                    HudReadout(vehicle.batteryRemainingPct?.toString() ?: NO_VALUE, "%", compact)
+                }
+                CellCountSelector(
+                    cells = cells,
+                    compact = compact,
+                    onSelect = {
+                        cells = it
+                        saveCellCount(context, it)
+                    },
+                )
+            }
         }
 
         // Mission Planner's own HUD convention: bottom middle, EKF left of
