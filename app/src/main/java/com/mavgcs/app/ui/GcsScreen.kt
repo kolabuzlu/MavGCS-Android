@@ -3,6 +3,7 @@ package com.mavgcs.app.ui
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
@@ -910,17 +911,25 @@ private const val TRACK_STEPS = 24
 /** The heading line overshoots the others so its tip stays visible. */
 private const val HEADING_REACH_FACTOR = 1.25
 
-private val HeadingLineColor = Color(0xFFFFD54F)
+private val HeadingLineColor = Color(0xFFFFFFFF)
 private val GroundTrackColor = Color(0xFF4FC3F7)
-private val TrajectoryColor = Color(0xFFE040FB)
+private val TrajectoryColor = Color(0xFFFFD54F)
 
-private fun guideLine(points: List<GeoPoint>, argb: Int, widthPx: Float): Polyline =
-    Polyline().apply {
-        setPoints(points)
-        outlinePaint.color = argb
-        outlinePaint.strokeWidth = widthPx
-        outlinePaint.strokeCap = Paint.Cap.ROUND
+private fun guideLine(
+    points: List<GeoPoint>,
+    argb: Int,
+    widthPx: Float,
+    dashed: Boolean = false,
+): Polyline = Polyline().apply {
+    setPoints(points)
+    outlinePaint.color = argb
+    outlinePaint.strokeWidth = widthPx
+    outlinePaint.strokeCap = if (dashed) Paint.Cap.BUTT else Paint.Cap.ROUND
+    if (dashed) {
+        // A round cap would smear the gaps closed at this width.
+        outlinePaint.pathEffect = DashPathEffect(floatArrayOf(14f, 10f), 0f)
     }
+}
 
 /** The point [distanceM] from [from] along [bearingDeg], on a spherical earth. */
 private fun destination(from: GeoPoint, bearingDeg: Float, distanceM: Double): GeoPoint {
@@ -1128,7 +1137,8 @@ private fun VehicleMap(
                     map.overlays += guideLine(
                         listOf(point, destination(point, heading, reach * HEADING_REACH_FACTOR)),
                         headingColor,
-                        2.5f,
+                        3.5f,
+                        dashed = true,
                     )
                 }
                 map.overlays += Marker(map).apply {
