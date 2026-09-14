@@ -260,7 +260,7 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                     ) {
                         MapToggle("Follow UAV", followUav) { followUav = !followUav }
                         MapToggle("Hybrid", hybridMap) { hybridMap = !hybridMap }
-                        MapToggle("Nav Lines", showGuides) { showGuides = !showGuides }
+                        MapToggle("Vectors", showGuides) { showGuides = !showGuides }
                     }
                     MapCoordinates(
                         lat = vehicle.lat,

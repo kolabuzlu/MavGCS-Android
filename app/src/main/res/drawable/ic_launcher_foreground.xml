@@ -1,0 +1,14 @@
+<!--
+  An adaptive icon is drawn on a 108dp canvas, but only a 66dp circle at its
+  centre is guaranteed to survive every launcher mask. A 72dp square would put
+  the monitor's top and bottom edges outside that circle, so they clip on a
+  round mask; 21dp of inset fits the artwork inside the circle itself.
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:drawable="@drawable/mavgcs_icon"
+        android:left="21dp"
+        android:top="21dp"
+        android:right="21dp"
+        android:bottom="21dp" />
+</layer-list>
