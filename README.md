@@ -22,6 +22,8 @@ Supports MAVLink over ELRS and LTE telemetry.
 
 You can monitor HUD and vital information about flight, use weather radar, experience 3D FPV view, see the vehicle on the moving map, view terrain radar, execute instant waypoint missions, and more.
 
+You need to get free token from [ion.cesium.com](http://ion.cesium.com/) to activate 3D FPV view.
+
 This app is optimized for 12.7" Android tablets.
 
 Created by **Derin Hakan Karakurt**
