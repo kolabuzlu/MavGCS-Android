@@ -73,6 +73,9 @@ enum class GuidedAction(val label: String, val unit: String) {
 
 enum class GcsCommand {
     ARM,
+
+    /** Arms with the pre-arm checks bypassed. */
+    FORCE_ARM,
     DISARM,
     RTL,
     LAND,

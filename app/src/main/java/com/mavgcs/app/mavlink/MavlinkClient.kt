@@ -124,6 +124,14 @@ class MavlinkClient {
             try {
                 when (command) {
                     GcsCommand.ARM -> sendCommand(connection, sys, comp, MavCmd.MAV_CMD_COMPONENT_ARM_DISARM, 1f)
+                    GcsCommand.FORCE_ARM -> sendCommand(
+                        connection,
+                        sys,
+                        comp,
+                        MavCmd.MAV_CMD_COMPONENT_ARM_DISARM,
+                        param1 = 1f,
+                        param2 = FORCE_ARM_MAGIC,
+                    )
                     GcsCommand.DISARM -> sendCommand(connection, sys, comp, MavCmd.MAV_CMD_COMPONENT_ARM_DISARM, 0f)
                     GcsCommand.RTL -> sendCommand(connection, sys, comp, MavCmd.MAV_CMD_NAV_RETURN_TO_LAUNCH)
                     GcsCommand.LAND -> sendCommand(connection, sys, comp, MavCmd.MAV_CMD_NAV_LAND)
@@ -644,6 +652,11 @@ class MavlinkClient {
         private const val MAV_FRAME_GLOBAL_RELATIVE_ALT = 3
         private const val SPEED_TYPE_AIRSPEED = 0
         private const val LOITER_RADIUS_PARAM = "WP_LOITER_RAD"
+        /**
+         * The value MAV_CMD_COMPONENT_ARM_DISARM expects in param2 to skip the
+         * pre-arm checks. Anything else there leaves them in force.
+         */
+        private const val FORCE_ARM_MAGIC = 21196f
         private const val REPOSITION_CHANGE_MODE = 1
         private const val HOME_POSITION_MESSAGE_ID = 242
         private const val HEARTBEAT_INTERVAL_MS = 1000L

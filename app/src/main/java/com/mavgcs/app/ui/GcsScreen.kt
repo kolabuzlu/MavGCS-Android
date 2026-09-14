@@ -529,8 +529,8 @@ private fun TelemetryCell(
     }
 }
 
-/** How long DISARM must be held before it fires. */
-private const val DISARM_HOLD_MILLIS = 3000
+/** How long a button must be held before its hold action fires. */
+private const val HOLD_MILLIS = 3000
 
 @Composable
 private fun ArmPad(
@@ -546,67 +546,89 @@ private fun ArmPad(
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(metrics.controlGap)) {
         // Red marks the state the vehicle is actually in, not the action the
         // button performs, so a glance says whether the props are live.
-        Button(
-            onClick = { onCommand(GcsCommand.ARM) },
+        HoldButton(
+            label = "ARM",
+            holdLabel = "FORCE\u2026",
             enabled = enabled,
-            modifier = Modifier
-                .weight(1f)
-                .height(metrics.armHeight),
+            containerColor = if (armed) scheme.error else scheme.surfaceVariant,
+            contentColor = if (armed) Color.White else scheme.onSurface,
             border = if (armed) null else BorderStroke(1.dp, scheme.outline),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = if (armed) scheme.error else scheme.surfaceVariant,
-                contentColor = if (armed) Color.White else scheme.onSurface,
-            ),
-        ) {
-            Text("ARM", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-        }
-        HoldToDisarmButton(
+            height = metrics.armHeight,
+            onHold = { onCommand(GcsCommand.FORCE_ARM) },
+            modifier = Modifier.weight(1f),
+            onTap = { onCommand(GcsCommand.ARM) },
+        )
+        HoldButton(
+            label = "DISARM",
+            holdLabel = "HOLD\u2026",
             enabled = enabled,
-            armed = armed,
-            metrics = metrics,
-            onDisarm = { onCommand(GcsCommand.DISARM) },
+            containerColor = if (armed) scheme.surfaceVariant else scheme.error,
+            contentColor = if (armed) scheme.onSurface else Color.White,
+            border = if (armed) BorderStroke(1.dp, scheme.outline) else null,
+            height = metrics.armHeight,
+            onHold = { onCommand(GcsCommand.DISARM) },
             modifier = Modifier.weight(1f),
         )
     }
 }
 
 /**
- * Disarming in flight cuts the motors, so it is deliberately not a single tap.
- * The command fires only once the press has been held for the full duration;
- * releasing early snaps the progress back and sends nothing.
+ * A button whose hold does something the tap does not: disarming cuts the
+ * motors and force arming skips the pre-arm checks, so neither should be one
+ * careless press away. The hold fires only on reaching the full duration, and
+ * releasing early sends nothing.
+ *
+ * A completed hold also has to swallow the tap, because the release that ends
+ * it still reaches onClick and would otherwise fire both actions.
  */
 @Composable
-private fun HoldToDisarmButton(
+private fun HoldButton(
+    label: String,
+    holdLabel: String,
     enabled: Boolean,
-    armed: Boolean,
-    metrics: LayoutMetrics,
-    onDisarm: () -> Unit,
+    containerColor: Color,
+    contentColor: Color,
+    border: BorderStroke?,
+    height: Dp,
+    onHold: () -> Unit,
     modifier: Modifier = Modifier,
+    onTap: (() -> Unit)? = null,
 ) {
-    val scheme = MaterialTheme.colorScheme
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val holding = pressed && enabled
+    var holdFired by remember { mutableStateOf(false) }
     val progress by animateFloatAsState(
         targetValue = if (holding) 1f else 0f,
         animationSpec = if (holding) {
-            tween(durationMillis = DISARM_HOLD_MILLIS, easing = LinearEasing)
+            tween(durationMillis = HOLD_MILLIS, easing = LinearEasing)
         } else {
             snap()
         },
-        finishedListener = { value -> if (value >= 1f) onDisarm() },
-        label = "disarmHold",
+        finishedListener = { value ->
+            if (value >= 1f) {
+                holdFired = true
+                onHold()
+            }
+        },
+        label = "hold",
     )
     Button(
-        onClick = {},
+        onClick = {
+            if (holdFired) {
+                holdFired = false
+            } else {
+                onTap?.invoke()
+            }
+        },
         enabled = enabled,
         interactionSource = interaction,
-        modifier = modifier.height(metrics.armHeight),
-        border = if (armed) BorderStroke(1.dp, scheme.outline) else null,
+        modifier = modifier.height(height),
+        border = border,
         contentPadding = PaddingValues(0.dp),
         colors = ButtonDefaults.buttonColors(
-            containerColor = if (armed) scheme.surfaceVariant else scheme.error,
-            contentColor = if (armed) scheme.onSurface else Color.White,
+            containerColor = containerColor,
+            contentColor = contentColor,
         ),
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
@@ -621,7 +643,7 @@ private fun HoldToDisarmButton(
                 )
             }
             Text(
-                text = if (holding) "HOLD\u2026" else "DISARM",
+                text = if (holding) holdLabel else label,
                 modifier = Modifier.align(Alignment.Center),
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
