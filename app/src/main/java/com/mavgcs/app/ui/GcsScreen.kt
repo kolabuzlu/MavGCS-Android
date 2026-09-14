@@ -593,7 +593,7 @@ private fun TelemetryCell(
             text = field.label,
             fontSize = metrics.gridLabel,
             lineHeight = metrics.gridLabel * 1.25f,
-            color = MaterialTheme.colorScheme.secondary,
+            color = MaterialTheme.colorScheme.onSurface,
             textAlign = TextAlign.Center,
             maxLines = 2,
         )

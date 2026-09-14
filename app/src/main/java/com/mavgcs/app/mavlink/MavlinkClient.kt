@@ -21,7 +21,6 @@ import io.dronefleet.mavlink.common.MavParamType
 import io.dronefleet.mavlink.common.MavSensorOrientation
 import io.dronefleet.mavlink.common.RequestDataStream
 import io.dronefleet.mavlink.common.ScaledPressure
-import io.dronefleet.mavlink.common.SetMode
 import io.dronefleet.mavlink.common.Statustext
 import io.dronefleet.mavlink.common.TerrainReport
 import io.dronefleet.mavlink.common.SysStatus
@@ -608,12 +607,9 @@ class MavlinkClient {
         comp: Int,
         custom: Long,
     ) {
-        val mode = SetMode.builder()
-            .targetSystem(sys)
-            .baseMode(EnumValue.create(MAV_MODE_FLAG_CUSTOM_MODE_ENABLED))
-            .customMode(custom)
-            .build()
-        connection.send2(GCS_SYSTEM_ID, GCS_COMPONENT_ID, mode)
+        // DO_SET_MODE alone. The deprecated SET_MODE used to go out beside it,
+        // and ArduPilot answered both, so every rejected mode change was
+        // reported twice in the vehicle's own messages.
         sendCommand(
             connection,
             sys,
