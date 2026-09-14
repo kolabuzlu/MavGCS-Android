@@ -75,17 +75,6 @@ object FlightModes {
 
     val planeGuidedMode = PlaneModeButton("GUIDED", 15L)
 
-    /** Quadplane modes, offered behind the VTOL dropdown. */
-    val vtolModes = listOf(
-        PlaneModeButton("QSTABILIZE", 17L),
-        PlaneModeButton("QHOVER", 18L),
-        PlaneModeButton("QLOITER", 19L),
-        PlaneModeButton("QLAND", 20L),
-        PlaneModeButton("QRTL", 21L),
-        PlaneModeButton("QAUTOTUNE", 22L),
-        PlaneModeButton("QACRO", 23L),
-    )
-
     private val rover = mapOf(
         0L to "MANUAL",
         3L to "STEERING",

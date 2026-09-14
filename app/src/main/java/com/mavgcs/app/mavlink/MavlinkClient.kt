@@ -8,6 +8,7 @@ import io.dronefleet.mavlink.common.Attitude
 import io.dronefleet.mavlink.common.BatteryStatus
 import io.dronefleet.mavlink.common.CommandInt
 import io.dronefleet.mavlink.common.CommandLong
+import io.dronefleet.mavlink.common.DistanceSensor
 import io.dronefleet.mavlink.common.GlobalPositionInt
 import io.dronefleet.mavlink.common.GpsRawInt
 import io.dronefleet.mavlink.common.HomePosition
@@ -16,6 +17,7 @@ import io.dronefleet.mavlink.common.ParamSet
 import io.dronefleet.mavlink.common.MavCmd
 import io.dronefleet.mavlink.common.MavFrame
 import io.dronefleet.mavlink.common.MavParamType
+import io.dronefleet.mavlink.common.MavSensorOrientation
 import io.dronefleet.mavlink.common.RequestDataStream
 import io.dronefleet.mavlink.common.ScaledPressure
 import io.dronefleet.mavlink.common.SetMode
@@ -401,8 +403,22 @@ class MavlinkClient {
                     windSpeedMs = payload.speed(),
                 )
             }
+            // ardupilotmega RANGEFINDER, kept for firmware that still sends it.
             is Rangefinder -> _state.update {
                 it.copy(rangefinderM = payload.distance())
+            }
+            // The message ArduPilot actually sends today. Only the downward
+            // sensor is the altitude rangefinder; a proximity ring reports on
+            // other orientations and would otherwise overwrite it.
+            is DistanceSensor -> _state.update { current ->
+                if (payload.orientation().entry() != MavSensorOrientation.MAV_SENSOR_ROTATION_PITCH_270) {
+                    current
+                } else {
+                    val centimetres = payload.currentDistance()
+                    val maxCentimetres = payload.maxDistance()
+                    val usable = centimetres > 0 && (maxCentimetres <= 0 || centimetres <= maxCentimetres)
+                    current.copy(rangefinderM = if (usable) centimetres / 100f else null)
+                }
             }
             is ScaledPressure -> _state.update {
                 it.copy(qnhHpa = qnhFrom(payload.pressAbs(), it.altMslM))

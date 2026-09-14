@@ -8,6 +8,7 @@ import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -29,12 +30,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.CheckBox
+import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -86,6 +86,7 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
     val scheme = MaterialTheme.colorScheme
     var flyTarget by remember { mutableStateOf<GeoPoint?>(null) }
     var showFlyDialog by remember { mutableStateOf(false) }
+    var followUav by remember { mutableStateOf(true) }
 
     Surface(modifier = Modifier.fillMaxSize(), color = scheme.background) {
         Row(
@@ -159,7 +160,13 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                     VehicleMap(
                         vehicle = vehicle,
                         flyTarget = flyTarget,
+                        followUav = followUav,
                         onMapTap = { flyTarget = it },
+                    )
+                    FollowUavToggle(
+                        following = followUav,
+                        onToggle = { followUav = !followUav },
+                        modifier = Modifier.align(Alignment.TopStart),
                     )
                     flyTarget?.let { target ->
                         FlyHereBar(
@@ -195,6 +202,33 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                 viewModel.flyTo(target.latitude, target.longitude, altitude)
             },
         )
+    }
+}
+
+@Composable
+private fun FollowUavToggle(
+    following: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val scheme = MaterialTheme.colorScheme
+    Row(
+        modifier = modifier
+            .padding(10.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(scheme.surface.copy(alpha = 0.9f))
+            .clickable(onClick = onToggle)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Icon(
+            imageVector = if (following) Icons.Filled.CheckBox else Icons.Filled.CheckBoxOutlineBlank,
+            contentDescription = null,
+            tint = if (following) scheme.primary else scheme.onSurfaceVariant,
+            modifier = Modifier.size(16.dp),
+        )
+        Text("Follow UAV", fontSize = 12.sp, color = scheme.onSurface)
     }
 }
 
@@ -392,8 +426,6 @@ private fun ArmPad(enabled: Boolean, onCommand: (GcsCommand) -> Unit) {
     }
 }
 
-private val VtolPurple = Color(0xFFB39DDB)
-private val VtolPurpleText = Color(0xFF1B1033)
 
 /**
  * A titled group box in the desktop's style. The border sits inside a top inset
@@ -548,13 +580,7 @@ private fun FlightModePanel(
                 modifier = Modifier.weight(1f),
                 onClick = { onSelect(FlightModes.planeGuidedMode) },
             )
-            VtolModeButton(
-                enabled = enabled,
-                currentMode = currentMode,
-                onSelect = onSelect,
-                modifier = Modifier.weight(1f),
-            )
-            Spacer(Modifier.weight(1f))
+            Spacer(Modifier.weight(2f))
         }
     }
 }
@@ -662,55 +688,6 @@ private fun ModeButton(
     }
 }
 
-@Composable
-private fun VtolModeButton(
-    enabled: Boolean,
-    currentMode: String,
-    onSelect: (PlaneModeButton) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    var expanded by remember { mutableStateOf(false) }
-    val active = FlightModes.vtolModes.any { it.label == currentMode }
-    Box(modifier = modifier) {
-        Button(
-            onClick = { expanded = true },
-            enabled = enabled,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(38.dp),
-            shape = RoundedCornerShape(6.dp),
-            contentPadding = PaddingValues(horizontal = 2.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = VtolPurple,
-                contentColor = VtolPurpleText,
-            ),
-        ) {
-            Text(
-                text = if (active) currentMode else "VTOL",
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-            )
-            Icon(
-                imageVector = Icons.Filled.ArrowDropDown,
-                contentDescription = "VTOL modes",
-                modifier = Modifier.size(18.dp),
-            )
-        }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            FlightModes.vtolModes.forEach { mode ->
-                DropdownMenuItem(
-                    text = { Text(mode.label, fontSize = 13.sp) },
-                    onClick = {
-                        expanded = false
-                        onSelect(mode)
-                    },
-                )
-            }
-        }
-    }
-}
-
 private const val PLANE_ICON_DP = 96
 
 /**
@@ -754,6 +731,7 @@ private val EsriWorldImagery = object : OnlineTileSourceBase(
 private fun VehicleMap(
     vehicle: VehicleState,
     flyTarget: GeoPoint?,
+    followUav: Boolean,
     onMapTap: (GeoPoint) -> Unit,
 ) {
     val trail = remember { mutableListOf<GeoPoint>() }
@@ -829,6 +807,10 @@ private fun VehicleMap(
                 }
                 if (firstFix) {
                     map.controller.setZoom(18.0)
+                }
+                // Recentre only while following, so panning by hand is not
+                // fought by the next telemetry update a moment later.
+                if (firstFix || followUav) {
                     map.controller.setCenter(point)
                 }
             }
