@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -26,8 +27,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
@@ -38,6 +41,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mavgcs.app.ui.theme.MavGreen
 import com.mavgcs.app.mavlink.HealthTint
 import com.mavgcs.app.mavlink.VehicleState
 import kotlin.math.abs
@@ -58,12 +62,16 @@ private const val PITCH_HALF_RANGE_DEG = 35f
 /** Height of the heading strip. The battery block is placed clear of it. */
 private val HeadingStripHeight = 18.dp
 
+/** The wind readout, in the corner the desktop HUD keeps it. */
+private val WindArrowHalf = 11.dp
+private val WindArrowColor = Color(0xFF78DCFF)
+
 /** Width of each vertical tape. The heading strip runs between the two. */
 private val TapeWidth = 40.dp
 
 /** The throttle column, inboard of the airspeed tape. */
 private val ThrottleBarWidth = 14.dp
-private val ThrottleFill = Color(0xFF3DDC97)
+private val ThrottleFill = MavGreen
 
 /** The vertical speed column, inboard of the altitude tape. */
 private val VsiBarWidth = 14.dp
@@ -146,6 +154,23 @@ fun FlightHud(vehicle: VehicleState, modifier: Modifier = Modifier) {
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(end = 4.dp, bottom = if (compact) 15.dp else 22.dp),
+        )
+
+        // Wind, in the top left corner the desktop puts it in. Below the
+        // heading strip rather than beside it: the desktop's heading tape is
+        // centred and only half the width, so it leaves that corner free,
+        // while this one runs the whole way across.
+        WindBox(
+            fromDeg = vehicle.windDirectionDeg,
+            speedMs = vehicle.windSpeedMs,
+            headingDeg = vehicle.headingDeg ?: vehicle.yawDeg,
+            compact = compact,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(
+                    start = TapeWidth + ThrottleBarWidth + 6.dp,
+                    top = HeadingStripHeight + 6.dp,
+                ),
         )
 
         // Battery, where the desktop HUD keeps it.
@@ -232,6 +257,87 @@ private fun HudCaption(text: String, modifier: Modifier = Modifier) {
     // Full white: these name the tapes, so they should read at a glance even
     // though the sliding numbers beside them are deliberately faint.
     Text(text = text, fontSize = 8.sp, color = Color.White, modifier = modifier)
+}
+
+
+/**
+ * Wind speed and direction, with an arrow drawn in the aircraft's own frame.
+ *
+ * The arrow points where the wind is blowing TOWARD, not where it comes from:
+ * flying into a headwind, it points down the screen, which is the direction
+ * the air is pushing the aeroplane. WIND reports the bearing the wind comes
+ * FROM, so that is a half turn, and subtracting the heading swings it out of
+ * compass north and into the nose's frame.
+ *
+ * The figure stays in degrees true, because that is what gets read back on the
+ * radio and compared with the forecast; only the arrow is relative.
+ */
+@Composable
+private fun WindBox(
+    fromDeg: Float?,
+    speedMs: Float?,
+    headingDeg: Float?,
+    compact: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(TapeBackground)
+            .padding(horizontal = 6.dp, vertical = if (compact) 2.dp else 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Canvas(
+            modifier = Modifier
+                .width(WindArrowHalf * 2)
+                .height(WindArrowHalf * 2),
+        ) {
+            // No reading yet: the arrow rests pointing up rather than
+            // vanishing, so the box keeps its shape and its place.
+            val turn = if (fromDeg == null) {
+                0f
+            } else {
+                (fromDeg - (headingDeg ?: 0f) + 180f).mod(360f)
+            }
+            rotate(degrees = turn) {
+                val half = WindArrowHalf.toPx()
+                val cx = size.width / 2f
+                val cy = size.height / 2f
+                val tip = cy - half
+                drawLine(
+                    color = WindArrowColor,
+                    start = Offset(cx, cy + half),
+                    end = Offset(cx, tip),
+                    strokeWidth = 2.dp.toPx(),
+                )
+                val wing = 4.dp.toPx()
+                val barb = 8.dp.toPx()
+                drawPath(
+                    path = Path().apply {
+                        moveTo(cx, tip)
+                        lineTo(cx - wing, tip + barb)
+                        lineTo(cx + wing, tip + barb)
+                        close()
+                    },
+                    color = WindArrowColor,
+                )
+            }
+        }
+        Column(modifier = Modifier.padding(start = 5.dp)) {
+            Text(
+                text = fromDeg?.let { "%03d°".format(Locale.ROOT, it.roundToInt() % 360) }
+                    ?: "---°",
+                fontSize = if (compact) 9.sp else 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = HudTextColor,
+            )
+            Text(
+                text = speedMs?.let { "%.1f kph".format(Locale.ROOT, it * 3.6f) } ?: "-- kph",
+                fontSize = if (compact) 7.sp else 9.sp,
+                color = HudTextColor.copy(alpha = 0.7f),
+            )
+        }
+    }
 }
 
 @Composable
@@ -333,27 +439,31 @@ private fun DrawScope.drawVerticalSpeedBar(climbMs: Float?, measurer: TextMeasur
         strokeWidth = 1f,
     )
 
-    val climb = climbMs ?: return
-    val travel = (climb.coerceIn(-VSI_FULL_SCALE_MS, VSI_FULL_SCALE_MS) /
-        VSI_FULL_SCALE_MS) * (trackHeight / 2f)
-    val y = centreY - travel
-    drawRect(
-        color = VsiFill.copy(alpha = 0.5f),
-        topLeft = Offset(left + inset, minOf(centreY, y)),
-        size = Size(width - inset * 2, abs(travel)),
-    )
-    drawLine(
-        color = VsiFill,
-        start = Offset(left + inset, y),
-        end = Offset(left + width - inset, y),
-        strokeWidth = 2.5f,
-    )
+    if (climbMs != null) {
+        val travel = (climbMs.coerceIn(-VSI_FULL_SCALE_MS, VSI_FULL_SCALE_MS) /
+            VSI_FULL_SCALE_MS) * (trackHeight / 2f)
+        val y = centreY - travel
+        drawRect(
+            color = VsiFill.copy(alpha = 0.5f),
+            topLeft = Offset(left + inset, minOf(centreY, y)),
+            size = Size(width - inset * 2, abs(travel)),
+        )
+        drawLine(
+            color = VsiFill,
+            start = Offset(left + inset, y),
+            end = Offset(left + width - inset, y),
+            strokeWidth = 2.5f,
+        )
+    }
 
     // The figure sits outboard of the column at mid-height, boxed like the
-    // throttle's. Signed, because which way it is going is the whole point.
-    val sign = if (climb > 0.05f) "+" else ""
+    // throttle's. Signed, because which way it is going is the whole point,
+    // and a dash rather than nothing when there is no reading yet.
     val readout = measurer.measure(
-        AnnotatedString(sign + "%.1f".format(Locale.ROOT, climb)),
+        AnnotatedString(
+            climbMs?.let { (if (it > 0.05f) "+" else "") + "%.1f".format(Locale.ROOT, it) }
+                ?: "--",
+        ),
         hudLabelStyle,
     )
     val boxHeight = 16.dp.toPx()
@@ -383,23 +493,32 @@ private fun DrawScope.drawThrottleBar(throttlePct: Int?, measurer: TextMeasurer)
     val width = ThrottleBarWidth.toPx()
     val left = TapeWidth.toPx()
     drawRect(TapeBackground, topLeft = Offset(left, 0f), size = Size(width, size.height))
-    val percent = throttlePct?.coerceIn(0, 100) ?: return
-    val inset = 2.dp.toPx()
-    val trackTop = inset
-    val trackHeight = size.height - inset * 2
-    val filled = trackHeight * percent / 100f
-    drawRect(
-        color = ThrottleFill,
-        topLeft = Offset(left + inset, trackTop + trackHeight - filled),
-        size = Size(width - inset * 2, filled),
-    )
+    val percent = throttlePct?.coerceIn(0, 100)
+    if (percent != null) {
+        val inset = 2.dp.toPx()
+        val trackHeight = size.height - inset * 2
+        val filled = trackHeight * percent / 100f
+        drawRect(
+            color = ThrottleFill,
+            topLeft = Offset(left + inset, inset + trackHeight - filled),
+            size = Size(width - inset * 2, filled),
+        )
+    }
 
     // The figure sits beside the column at mid-height, boxed like the tapes'
-    // own readouts so the three read as one instrument.
-    val readout = measurer.measure(AnnotatedString("$percent%"), hudLabelStyle)
+    // own readouts so the three read as one instrument. It stays up with no
+    // reading, showing a dash: an instrument that is merely waiting looks like
+    // a missing instrument if it disappears.
+    val readout = measurer.measure(
+        AnnotatedString(percent?.let { "$it%" } ?: "--"),
+        hudLabelStyle,
+    )
     val centreY = size.height / 2f
     val boxHeight = 16.dp.toPx()
-    val boxWidth = readout.size.width + 8.dp.toPx()
+    // Sized to the widest figure it will ever hold, so it does not resize as
+    // the throttle moves or when the first reading lands.
+    val boxWidth = measurer.measure(AnnotatedString("100%"), hudLabelStyle).size.width +
+        8.dp.toPx()
     val boxLeft = left + width
     drawRect(
         color = Color.Black,

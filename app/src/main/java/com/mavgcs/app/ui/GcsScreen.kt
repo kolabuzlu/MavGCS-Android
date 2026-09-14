@@ -610,15 +610,14 @@ private const val ETA_MAX_SECONDS = 100f * 3600f
 /**
  * Time to the waypoint, from distance and ground speed.
  *
- * Blank rather than approximate where the arithmetic runs away: standing
- * still divides by nothing, and no waypoint reports zero distance, which
- * would read as "arrived" if it were let through. Not navigating says so with
- * a dash rather than vanishing, since a box that disappears looks like a
- * fault where a dash plainly says there is no arrival to time.
+ * The box is always up, dashed when there is no arrival to time. A box that
+ * comes and goes looks like a fault, and its absence is indistinguishable
+ * from a reading of nothing; a dash plainly says the question has no answer
+ * right now.
  */
 @Composable
 private fun EtaReadout(vehicle: VehicleState, modifier: Modifier = Modifier) {
-    val value = etaValue(vehicle) ?: return
+    val value = etaValue(vehicle)
     Row(
         modifier = modifier
             .clip(RoundedCornerShape(4.dp))
@@ -636,22 +635,25 @@ private fun EtaReadout(vehicle: VehicleState, modifier: Modifier = Modifier) {
     }
 }
 
-/** The value to show, or null when the box should not be up at all. */
-private fun etaValue(vehicle: VehicleState): String? {
-    if (!vehicle.linkUp) {
-        return null
-    }
-    if (vehicle.mode !in EtaNavModes) {
+/**
+ * The figure, or a dash where there is none to give.
+ *
+ * Dashed rather than guessed where the arithmetic runs away: standing still
+ * divides by nothing, and no waypoint reports zero distance, which would read
+ * as "arrived" if it were let through.
+ */
+private fun etaValue(vehicle: VehicleState): String {
+    if (!vehicle.linkUp || vehicle.mode !in EtaNavModes) {
         return "--"
     }
-    val distance = vehicle.distToWpM ?: return null
-    val groundSpeed = vehicle.groundSpeedMs ?: return null
+    val distance = vehicle.distToWpM ?: return "--"
+    val groundSpeed = vehicle.groundSpeedMs ?: return "--"
     if (distance < ETA_MIN_DIST_M || groundSpeed < ETA_MIN_GS_MPS) {
-        return null
+        return "--"
     }
     val seconds = distance / groundSpeed
     if (seconds > ETA_MAX_SECONDS) {
-        return null
+        return "--"
     }
     return etaClock(seconds)
 }
@@ -771,7 +773,7 @@ private fun FlyHereBar(
             onClick = onFly,
             enabled = enabled,
             modifier = Modifier.height(38.dp),
-            shape = RoundedCornerShape(6.dp),
+            shape = ControlCorner,
             colors = ButtonDefaults.buttonColors(
                 containerColor = scheme.secondary,
                 contentColor = scheme.onSecondary,
@@ -1019,6 +1021,7 @@ private fun HoldButton(
         enabled = enabled,
         interactionSource = interaction,
         modifier = modifier.height(height),
+        shape = ControlCorner,
         border = border,
         contentPadding = PaddingValues(0.dp),
         colors = ButtonDefaults.buttonColors(
@@ -1275,6 +1278,7 @@ private fun ConnectionPanel(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(40.dp),
+            shape = ControlCorner,
             contentPadding = PaddingValues(horizontal = 8.dp),
             colors = ButtonDefaults.buttonColors(
                 containerColor = if (form.listening) scheme.error else scheme.primary,
@@ -1387,7 +1391,7 @@ private fun FlightModePanel(
                 modifier = Modifier
                     .weight(2f)
                     .height(metrics.controlHeight),
-                shape = RoundedCornerShape(6.dp),
+                shape = ControlCorner,
                 contentPadding = PaddingValues(horizontal = 4.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = FlyToBlue,
@@ -1795,6 +1799,15 @@ private fun GuidedValueDialog(
     )
 }
 
+/**
+ * The corner every command button shares.
+ *
+ * Arm, calibrate, disarm and connect had been left on the Material default,
+ * which is a full pill, so they read as a different family to the mode buttons
+ * sitting right beneath them.
+ */
+private val ControlCorner = RoundedCornerShape(6.dp)
+
 @Composable
 private fun ModeButton(
     label: String,
@@ -1811,7 +1824,7 @@ private fun ModeButton(
         onClick = onClick,
         enabled = enabled,
         modifier = modifier.height(height),
-        shape = RoundedCornerShape(6.dp),
+        shape = ControlCorner,
         contentPadding = PaddingValues(horizontal = 2.dp),
         border = if (active || alert) null else BorderStroke(1.dp, scheme.outline),
         colors = ButtonDefaults.buttonColors(

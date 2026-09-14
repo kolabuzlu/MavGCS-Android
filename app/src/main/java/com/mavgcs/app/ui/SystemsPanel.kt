@@ -18,6 +18,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mavgcs.app.ui.theme.MavGreen
 import com.mavgcs.app.mavlink.HealthState
 import com.mavgcs.app.mavlink.SystemHealth
 import com.mavgcs.app.mavlink.VehicleState
@@ -38,7 +39,7 @@ private fun coloursFor(state: HealthState): CellColours = when (state) {
     // reserved for something actually going wrong, and a disabled airspeed
     // sensor is a decision, not a warning.
     HealthState.OFF -> CellColours(Color(0xFF7D8EA0), Color(0xFF1A1F24))
-    HealthState.OK -> CellColours(Color(0xFF5CCF5C), Color(0xFF172117))
+    HealthState.OK -> CellColours(MavGreen, Color(0xFF172117))
     HealthState.WARN -> CellColours(Color(0xFFD8A23A), Color(0xFF241F16))
     HealthState.FAILED -> CellColours(Color(0xFFFF5555), Color(0xFF2A1616))
 }

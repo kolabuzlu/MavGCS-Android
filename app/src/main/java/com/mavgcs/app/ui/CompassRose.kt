@@ -25,6 +25,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.mavgcs.app.ui.theme.MavGreen
 import com.mavgcs.app.mavlink.VehicleState
 import kotlin.math.PI
 import kotlin.math.atan2
@@ -45,7 +46,7 @@ private val CompassNorth = Color(0xFFFF4D4D)
 private val CompassTrack = Color(0xFFFFC83D)
 private val CompassCourse = Color(0xFFFFA726)
 private val CompassWindText = Color(0xFF4FC3F7)
-private val CompassHome = Color(0xFF6EE787)
+private val CompassHome = MavGreen
 private val CompassWind = Color(0xFF1E9FD6)
 
 /** The wind arrow sits under the cardinals, which paint over it. */
