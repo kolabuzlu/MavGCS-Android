@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -38,8 +37,8 @@ import kotlin.math.roundToInt
 private val SkyColor = Color(0xFF3A6EA5)
 private val GroundColor = Color(0xFF8B5A2B)
 private val HudYellow = Color(0xFFFFD54F)
-private val TapeBackground = Color(0xCC0B1220)
-private val HudTextColor = Color(0xFFE8EEF7)
+private val TapeBackground = Color(0xCC141414)
+private val HudTextColor = Color(0xFFE6E6E6)
 
 /** Degrees of pitch from the centre of the horizon to the top of the HUD. */
 private const val PITCH_HALF_RANGE_DEG = 35f
@@ -119,17 +118,6 @@ fun FlightHud(vehicle: VehicleState, modifier: Modifier = Modifier) {
             HudReadout(vehicle.batteryA.oneDecimal(), "A", compact)
             HudReadout(vehicle.batteryRemainingPct?.toString() ?: NO_VALUE, "%", compact)
         }
-
-        Row(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .padding(horizontal = 4.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            HudCorner("LAT " + (vehicle.lat?.let { "%.6f".format(it) } ?: NO_VALUE))
-            HudCorner("LON " + (vehicle.lon?.let { "%.6f".format(it) } ?: NO_VALUE))
-        }
     }
 }
 
@@ -153,20 +141,6 @@ private fun HudReadout(value: String, unit: String, compact: Boolean) {
             color = HudTextColor.copy(alpha = 0.7f),
         )
     }
-}
-
-@Composable
-private fun HudCorner(text: String) {
-    Text(
-        text = text,
-        fontSize = 9.sp,
-        fontWeight = FontWeight.Medium,
-        color = HudYellow,
-        modifier = Modifier
-            .clip(RoundedCornerShape(4.dp))
-            .background(TapeBackground)
-            .padding(horizontal = 6.dp, vertical = 2.dp),
-    )
 }
 
 private fun DrawScope.drawHorizon(rollDeg: Float, pitchDeg: Float, measurer: TextMeasurer) {

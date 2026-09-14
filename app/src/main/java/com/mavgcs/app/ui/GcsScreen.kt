@@ -229,6 +229,11 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                         onToggle = { followUav = !followUav },
                         modifier = Modifier.align(Alignment.TopStart),
                     )
+                    MapCoordinates(
+                        lat = vehicle.lat,
+                        lon = vehicle.lon,
+                        modifier = Modifier.align(Alignment.BottomStart),
+                    )
                     flyTarget?.let { target ->
                         FlyHereBar(
                             target = target,
@@ -262,6 +267,36 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                 showFlyDialog = false
                 viewModel.flyTo(target.latitude, target.longitude, altitude)
             },
+        )
+    }
+}
+
+@Composable
+private fun MapCoordinates(lat: Double?, lon: Double?, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
+            .padding(10.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f))
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        MapCoordinate("LAT", lat)
+        MapCoordinate("LON", lon)
+    }
+}
+
+@Composable
+private fun MapCoordinate(label: String, value: Double?) {
+    val scheme = MaterialTheme.colorScheme
+    Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        Text(label, fontSize = 11.sp, color = scheme.onSurfaceVariant)
+        Text(
+            text = value?.let { "%.6f".format(it) } ?: NO_DATA,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            fontFamily = FontFamily.Monospace,
+            color = scheme.onSurface,
         )
     }
 }

@@ -1,5 +1,5 @@
 <resources>
-    <color name="gcs_bg">#FF0B1220</color>
+    <color name="gcs_bg">#FF1E1E1E</color>
     <color name="gcs_accent">#FF3DDC97</color>
     <color name="splash_bg">#FF080809</color>
 </resources>
