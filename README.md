@@ -29,3 +29,10 @@ Created by **Derin Hakan Karakurt**
 Download `MavGCS-<version>.apk` from the
 [Releases page](https://github.com/kolabuzlu/MavGCS-Android/releases), install it,
 and run the app.
+
+It is signed with the
+project's own key, so future releases will update over this one.
+
+```
+sha256  3f2cbbe98cb45705536a12381fe497e09e5b3f559d063e33cfd4be8bc3354507
+```
