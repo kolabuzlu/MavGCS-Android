@@ -167,6 +167,8 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
     var followUav by remember { mutableStateOf(true) }
     var hybridMap by remember { mutableStateOf(false) }
     var showGuides by remember { mutableStateOf(true) }
+    // Bumped to ask the map to drop its trail; the map owns the points.
+    var clearTrailToken by remember { mutableStateOf(0) }
     val configuration = LocalConfiguration.current
     val metrics = metricsFor(configuration.screenWidthDp.dp, configuration.screenHeightDp.dp)
 
@@ -252,6 +254,7 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                         followUav = followUav,
                         hybrid = hybridMap,
                         showGuides = showGuides,
+                        clearTrailToken = clearTrailToken,
                         onMapTap = { flyTarget = it },
                     )
                     Row(
@@ -261,8 +264,9 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         MapToggle("Follow UAV", followUav) { followUav = !followUav }
-                        MapToggle("Hybrid", hybridMap) { hybridMap = !hybridMap }
                         MapToggle("Vectors", showGuides) { showGuides = !showGuides }
+                        MapButton("Clear Trail") { clearTrailToken++ }
+                        MapToggle("Hybrid", hybridMap) { hybridMap = !hybridMap }
                     }
                     MapCoordinates(
                         lat = vehicle.lat,
@@ -333,6 +337,22 @@ private fun MapCoordinate(label: String, value: Double?) {
             fontFamily = FontFamily.Monospace,
             color = scheme.onSurface,
         )
+    }
+}
+
+@Composable
+private fun MapButton(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(scheme.surface.copy(alpha = 0.9f))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // Accented rather than boxed: this one acts instead of holding a state.
+        Text(label, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = scheme.primary)
     }
 }
 
@@ -1070,9 +1090,13 @@ private fun VehicleMap(
     followUav: Boolean,
     hybrid: Boolean,
     showGuides: Boolean,
+    clearTrailToken: Int,
     onMapTap: (GeoPoint) -> Unit,
 ) {
     val trail = remember { mutableListOf<GeoPoint>() }
+    // Held outside snapshot state on purpose: comparing the token here must not
+    // itself schedule another recomposition on every frame of telemetry.
+    val lastCleared = remember { intArrayOf(clearTrailToken) }
     val context = LocalContext.current
     val planeIcon = remember(context) { planeMarkerIcon(context) }
     val homeIcon = remember(context) { homeMarkerIcon(context) }
@@ -1119,6 +1143,10 @@ private fun VehicleMap(
             }
         },
         update = { map ->
+            if (clearTrailToken != lastCleared[0]) {
+                trail.clear()
+                lastCleared[0] = clearTrailToken
+            }
             // Rebuilt every update, so it has to happen whether or not there is a
             // fix, otherwise the target marker would never refresh without one.
             map.overlays.removeAll { it !is MapEventsOverlay && it !is TilesOverlay }
