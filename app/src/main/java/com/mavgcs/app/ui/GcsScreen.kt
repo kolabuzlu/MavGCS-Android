@@ -58,6 +58,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -956,6 +957,9 @@ private fun VehicleMap(
     val context = LocalContext.current
     val planeIcon = remember(context) { planeMarkerIcon(context) }
     val homeIcon = remember(context) { ContextCompat.getDrawable(context, R.drawable.ic_home_marker) }
+    // Polyline paints through the android Paint API, so the themed colour has to
+    // be resolved to an int out here rather than read inside the update lambda.
+    val trailColor = MaterialTheme.colorScheme.error.toArgb()
     // Built once: each carries a tile provider and cache that should survive the
     // overlay rebuild that happens on every telemetry update.
     val referenceOverlays = remember(context) {
@@ -1028,7 +1032,7 @@ private fun VehicleMap(
                     map.overlays += Polyline().apply {
                         setPoints(trail.toList())
                         outlinePaint.strokeWidth = 8f
-                        outlinePaint.color = 0xFF3DDC97.toInt()
+                        outlinePaint.color = trailColor
                         outlinePaint.strokeCap = Paint.Cap.ROUND
                     }
                 }
