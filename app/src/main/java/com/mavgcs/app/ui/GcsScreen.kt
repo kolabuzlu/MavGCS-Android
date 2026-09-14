@@ -60,6 +60,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mavgcs.app.R
@@ -758,6 +759,7 @@ private fun VehicleMap(
     val trail = remember { mutableListOf<GeoPoint>() }
     val context = LocalContext.current
     val planeIcon = remember(context) { planeMarkerIcon(context) }
+    val homeIcon = remember(context) { ContextCompat.getDrawable(context, R.drawable.ic_home_marker) }
     // The overlay is built once in factory, so it captures whatever handler was
     // current at that moment; this keeps it pointing at the latest one.
     val currentTap by rememberUpdatedState(onMapTap)
@@ -788,6 +790,16 @@ private fun VehicleMap(
             // Rebuilt every update, so it has to happen whether or not there is a
             // fix, otherwise the target marker would never refresh without one.
             map.overlays.removeAll { it !is MapEventsOverlay }
+            val homeLat = vehicle.homeLat
+            val homeLon = vehicle.homeLon
+            if (homeLat != null && homeLon != null) {
+                map.overlays += Marker(map).apply {
+                    position = GeoPoint(homeLat, homeLon)
+                    icon = homeIcon
+                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                    title = "Home"
+                }
+            }
             val lat = vehicle.lat
             val lon = vehicle.lon
             if (lat != null && lon != null && lat != 0.0 && lon != 0.0) {

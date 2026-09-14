@@ -469,6 +469,26 @@ class MavlinkClient {
             .startStop(1)
             .build()
         tx.execute { runCatching { connection.send2(GCS_SYSTEM_ID, GCS_COMPONENT_ID, request) } }
+        requestHomePosition(connection, sys, comp)
+    }
+
+    /**
+     * HOME_POSITION is only emitted when home is set, so connecting to a vehicle
+     * that is already flying never sees it and distance-to-home stays blank.
+     * Ask for it explicitly instead of waiting for one that will not come.
+     */
+    private fun requestHomePosition(connection: MavlinkConnection, sys: Int, comp: Int) {
+        tx.execute {
+            runCatching {
+                sendCommand(
+                    connection,
+                    sys,
+                    comp,
+                    MavCmd.MAV_CMD_REQUEST_MESSAGE,
+                    param1 = HOME_POSITION_MESSAGE_ID.toFloat(),
+                )
+            }
+        }
     }
 
     private fun sendHeartbeat(connection: MavlinkConnection) {
@@ -579,6 +599,7 @@ class MavlinkClient {
         private const val SPEED_TYPE_AIRSPEED = 0
         private const val LOITER_RADIUS_PARAM = "WP_LOITER_RAD"
         private const val REPOSITION_CHANGE_MODE = 1
+        private const val HOME_POSITION_MESSAGE_ID = 242
     }
 }
 
