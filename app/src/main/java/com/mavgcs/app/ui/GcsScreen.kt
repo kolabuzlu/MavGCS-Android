@@ -1938,19 +1938,34 @@ private class WeatherOverlay : Overlay() {
 }
 
 /**
- * Seconds of flight the predictive lines reach ahead of the aircraft.
+ * Seconds of flight the two straight lines reach ahead of the aircraft.
  *
- * The floor and ceiling double with the horizon rather than staying put: they
- * are the same reach expressed for the standstill and flat out cases, and left
- * alone they would clamp the lines back to their old length at both ends.
+ * The floor and ceiling are that same reach written out for the standstill and
+ * flat out cases, so all three belong together and move together.
  */
 private const val GUIDE_HORIZON_SECONDS = 20.0
 private const val GUIDE_MIN_METRES = 120.0
 private const val GUIDE_MAX_METRES = 1200.0
+
+/**
+ * The turn prediction keeps the shorter horizon on purpose.
+ *
+ * It is the present turn rate integrated forward, so the further it is carried
+ * the more it asserts about a turn nobody has promised to hold. The straight
+ * lines can be drawn out as far as is useful because they claim much less.
+ */
+private const val TRACK_HORIZON_SECONDS = 10.0
+private const val TRACK_MIN_METRES = 60.0
 private const val TRACK_STEPS = 24
 
-/** The heading line overshoots the others so its tip stays visible. */
-private const val HEADING_REACH_FACTOR = 1.25
+/**
+ * The heading line stops short of the ground track.
+ *
+ * Where the aeroplane is going matters more than where its nose is pointing,
+ * so the track is the line left to reach furthest. The step between the two
+ * tips is also what makes the crab angle read at a glance.
+ */
+private const val HEADING_REACH_FACTOR = 0.85
 
 private val HeadingLineColor = Color(0xFFFFFFFF)
 private val GroundTrackColor = Color(0xFF4FC3F7)
@@ -2000,8 +2015,8 @@ private fun predictedTrack(
     groundSpeedMs: Double,
     turnRateDegSec: Float,
 ): List<GeoPoint> {
-    val step = GUIDE_HORIZON_SECONDS / TRACK_STEPS
-    val leg = (groundSpeedMs * step).coerceAtLeast(GUIDE_MIN_METRES / TRACK_STEPS)
+    val step = TRACK_HORIZON_SECONDS / TRACK_STEPS
+    val leg = (groundSpeedMs * step).coerceAtLeast(TRACK_MIN_METRES / TRACK_STEPS)
     var course = courseDeg
     var here = from
     val points = mutableListOf(from)
