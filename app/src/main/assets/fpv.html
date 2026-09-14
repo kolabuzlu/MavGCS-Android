@@ -59,6 +59,19 @@
       overflow:visible;
       text-align:left;
   }
+  /* Each part on its own block. As inline runs they share a line box with the
+     logo container, and even pinned out of flow it still lends that first line
+     an indent, so "Upgrade" started a few pixels right of "commercial" beneath
+     it. Blocks do not share a line with anything, so every line starts flush. */
+  .cesium-credit-textContainer,
+  .cesium-credit-expand-link,
+  .cesium-credit-textContainer .cesium-credit-wrapper,
+  .cesium-credit-textContainer a {
+      display:block !important;
+      text-indent:0 !important;
+      margin:0 !important;
+      padding:0 !important;
+  }
   /* The logo ships at a size meant for a full browser window. */
   .cesium-credit-logoContainer img { height:11px !important; width:auto !important; }
   .cesium-widget-credits a { text-decoration:none; color:#cfd8e0; }
