@@ -99,6 +99,13 @@ class MavlinkClient {
     private var worker: Thread? = null
     private var heartbeat: Thread? = null
     private var datagramSocket: DatagramSocket? = null
+    // The outstanding mode request. Guarded because it is written from the UI
+    // thread and read from the heartbeat thread that resends it.
+    private val modeLock = Any()
+    private var modeWanted: String? = null
+    private var modeWantedCustom: Long = 0L
+    private var modeRetryNextMs: Long = 0L
+    private var modeRetryUntilMs: Long = 0L
     private var tcpSocket: Socket? = null
     /** Guards the upload state machine, which the parse and tx threads share. */
     private val missionLock = Any()
@@ -140,13 +147,22 @@ class MavlinkClient {
                 Log.w(TAG, "Link error: ${error.message ?: error.javaClass.simpleName}")
             } finally {
                 running.set(false)
-                _state.update { it.copy(linkUp = false) }
+                clearModeRequest()
+                _state.update { it.copy(linkUp = false, modePending = null) }
             }
         }
     }
 
     fun disconnect() {
         running.set(false)
+        clearModeRequest()
+        // Forget who the vehicle was. The stream rates are applied once, on
+        // first contact, and first contact is decided by this being null --
+        // so leaving it set meant every reconnect after the first silently
+        // kept whatever rates the vehicle happened to have. On a link that
+        // drops and is redialled, which is the normal life of an LTE modem,
+        // that is the reconnect quietly going back to flooding.
+        target.set(null)
         worker?.interrupt()
         heartbeat?.interrupt()
         runCatching { datagramSocket?.close() }
@@ -156,7 +172,7 @@ class MavlinkClient {
         heartbeat = null
         datagramSocket = null
         tcpSocket = null
-        _state.update { it.copy(linkUp = false) }
+        _state.update { it.copy(linkUp = false, modePending = null) }
     }
 
     fun send(command: GcsCommand) {
@@ -227,6 +243,73 @@ class MavlinkClient {
             } catch (error: Exception) {
                 Log.w(TAG, "Mode change failed: ${error.message ?: error.javaClass.simpleName}")
             }
+        }
+        // Held open until a heartbeat says the aircraft is in it. A second
+        // press replaces this one rather than queueing behind it, so there is
+        // only ever one mode outstanding.
+        val now = System.currentTimeMillis()
+        synchronized(modeLock) {
+            modeWanted = label
+            modeWantedCustom = customMode
+            modeRetryNextMs = now + MODE_RETRY_EVERY_MS
+            modeRetryUntilMs = now + MODE_RETRY_FOR_MS
+        }
+        _state.update { it.copy(modePending = label) }
+    }
+
+    /**
+     * Resend the outstanding mode, or give up on it.
+     *
+     * Driven from the heartbeat thread, which ticks regardless of which
+     * transport is in use and whether anything is arriving on it.
+     */
+    private fun driveModeRequest() {
+        val now = System.currentTimeMillis()
+        var resend: Pair<String, Long>? = null
+        var abandoned: String? = null
+        synchronized(modeLock) {
+            val wanted = modeWanted
+            if (wanted != null) {
+                if (now >= modeRetryUntilMs) {
+                    abandoned = wanted
+                    modeWanted = null
+                    modeRetryNextMs = 0L
+                    modeRetryUntilMs = 0L
+                } else if (now >= modeRetryNextMs) {
+                    modeRetryNextMs = now + MODE_RETRY_EVERY_MS
+                    resend = wanted to modeWantedCustom
+                }
+            }
+        }
+        abandoned?.let { label ->
+            _state.update { it.copy(modePending = null) }
+            note(
+                "Mode change to $label was not acknowledged - too much of the " +
+                    "link is being lost. Press it again.",
+            )
+        }
+        resend?.let { (_, custom) ->
+            val connection = connectionRef.get() ?: return
+            val (sys, comp) = target.get() ?: return
+            tx.execute { runCatching { sendModeChange(connection, sys, comp, custom) } }
+        }
+    }
+
+    /** Nothing outstanding any more, whatever the reason. */
+    private fun clearModeRequest() {
+        synchronized(modeLock) {
+            modeWanted = null
+            modeRetryNextMs = 0L
+            modeRetryUntilMs = 0L
+        }
+    }
+
+    /** A line for the Messages panel that did not come from the vehicle. */
+    private fun note(text: String) {
+        _state.update { current ->
+            current.copy(
+                statusLog = (current.statusLog + text).takeLast(MAX_VEHICLE_MESSAGES),
+            )
         }
     }
 
@@ -380,6 +463,7 @@ class MavlinkClient {
             try {
                 while (running.get() && !Thread.currentThread().isInterrupted) {
                     runCatching { tx.execute { runCatching { sendHeartbeat(connection) } } }
+                    runCatching { driveModeRequest() }
                     Thread.sleep(HEARTBEAT_INTERVAL_MS)
                 }
             } catch (_: InterruptedException) {
@@ -622,9 +706,25 @@ class MavlinkClient {
             Firmware.PX4 -> FlightModes.px4ModeName(custom)
             Firmware.UNKNOWN -> "MODE $custom"
         }
+        // The aircraft saying which mode it is in is the only confirmation
+        // worth having. A COMMAND_ACK says the request was received, not that
+        // the mode took -- and a mode the pilot selected on their own switch
+        // clears the request just the same, because there is nothing left to
+        // chase either way.
+        val confirmed = synchronized(modeLock) {
+            if (modeWanted != null && modeWanted == mode) {
+                modeWanted = null
+                modeRetryNextMs = 0L
+                modeRetryUntilMs = 0L
+                true
+            } else {
+                false
+            }
+        }
         _state.update {
             it.copy(
                 linkUp = true,
+                modePending = if (confirmed) null else it.modePending,
                 lastHeartbeatMs = now,
                 systemId = message.originSystemId,
                 componentId = message.originComponentId,
@@ -928,7 +1028,23 @@ class MavlinkClient {
                             param1 = id.toFloat(),
                             param2 = interval.toFloat(),
                         )
+                        pauseBetweenCommands()
                     }
+                }
+                // By number, because these postdate the MAVLink library this
+                // app is built against and so have no class to name. Silencing
+                // one does not require being able to parse it.
+                val unwantedInterval = if (rates.full) 0f else -1f
+                DISABLED_MESSAGE_IDS.forEach { id ->
+                    sendCommand(
+                        connection,
+                        sys,
+                        comp,
+                        MavCmd.MAV_CMD_SET_MESSAGE_INTERVAL,
+                        param1 = id.toFloat(),
+                        param2 = unwantedInterval,
+                    )
+                    pauseBetweenCommands()
                 }
                 Log.i(
                     TAG,
@@ -945,6 +1061,20 @@ class MavlinkClient {
         if (hz > 0f) (1_000_000f / hz).toInt() else -1
 
     /** The id the dialect gives this message, straight off its own annotation. */
+    /**
+     * A gap between the rate commands, because there are thirty of them.
+     *
+     * ArduPilot handles COMMAND_LONG one at a time and drops what arrives
+     * while it is busy. Fired as a burst, some of these are silently lost --
+     * which is why one message stayed at 4Hz while its neighbours in the same
+     * list went quiet. Nothing reports the loss, so the settings look applied
+     * and are not. Paced, the whole set lands; it costs a second, once, at
+     * connect.
+     */
+    private fun pauseBetweenCommands() {
+        runCatching { Thread.sleep(RATE_COMMAND_GAP_MS) }
+    }
+
     private fun messageId(type: Class<*>): Int? =
         runCatching { type.getAnnotation(MavlinkMessageInfo::class.java)?.id }.getOrNull()
 
@@ -1106,6 +1236,21 @@ class MavlinkClient {
             SystemTime::class.java,
         )
 
+        /**
+         * Streamed by ArduPilot, never read here, and absent from the MAVLink
+         * library this is built against, so they can only be named by number.
+         *
+         * Measured on a plane at the rates this app asks for, these two were
+         * 316 B/s of an 891 B/s stream -- a third of everything the vehicle
+         * sent, for data nothing displays. On a link with room to spare that
+         * is merely wasteful; on ELRS at 435 B/s it is most of the budget,
+         * and the radio drops whatever overflows without caring which.
+         *
+         * 11030 ESC_TELEMETRY_1_TO_4, 4Hz and 220 B/s of it.
+         * 295   AIRSPEED, whose figure VFR_HUD already carries.
+         */
+        private val DISABLED_MESSAGE_IDS: List<Int> = listOf(11030, 295)
+
         private const val MAX_VEHICLE_MESSAGES = 200
         private const val MAV_MODE_FLAG_CUSTOM_MODE_ENABLED = 1
         private const val MAV_FRAME_GLOBAL_RELATIVE_ALT = 3
@@ -1125,6 +1270,21 @@ class MavlinkClient {
          */
         private const val MISSION_CLEAR_SETTLE_MS = 500L
         private const val HEARTBEAT_INTERVAL_MS = 1000L
+
+        /** How often an unconfirmed mode request goes back on the wire. */
+        /** Spacing between the stream-rate commands. See pauseBetweenCommands. */
+        private const val RATE_COMMAND_GAP_MS = 40L
+
+        private const val MODE_RETRY_EVERY_MS = 1000L
+
+        /**
+         * How long to keep trying before admitting it is not getting through.
+         *
+         * Long enough to ride out the burst losses and handover stalls these
+         * links produce, short enough that a button does not sit lit when the
+         * link has genuinely gone.
+         */
+        private const val MODE_RETRY_FOR_MS = 10_000L
         private const val MIN_COURSE_SPEED_MS = 1f
     }
 }

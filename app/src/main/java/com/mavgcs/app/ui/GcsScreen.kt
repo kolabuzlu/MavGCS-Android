@@ -338,6 +338,7 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                 FlightModePanel(
                     enabled = vehicle.linkUp,
                     currentMode = vehicle.mode,
+                    pendingMode = vehicle.modePending,
                     metrics = metrics,
                     onSelect = viewModel::setFlightMode,
                     onFlyToLatLon = { showFlyToLatLon = true },
@@ -1462,6 +1463,7 @@ private const val HOLD_ELLIPSIS = "HOLD…"
 private fun FlightModePanel(
     enabled: Boolean,
     currentMode: String,
+    pendingMode: String?,
     metrics: LayoutMetrics,
     onSelect: (PlaneModeButton) -> Unit,
     onFlyToLatLon: () -> Unit,
@@ -1478,6 +1480,7 @@ private fun FlightModePanel(
                     ModeButton(
                         label = mode.label,
                         active = currentMode == mode.label,
+                        pending = pendingMode == mode.label,
                         enabled = enabled,
                         height = metrics.controlHeight,
                         modifier = Modifier.weight(1f),
@@ -1493,6 +1496,7 @@ private fun FlightModePanel(
             ModeButton(
                 label = FlightModes.planeGuidedMode.label,
                 active = currentMode == FlightModes.planeGuidedMode.label,
+                pending = pendingMode == FlightModes.planeGuidedMode.label,
                 enabled = enabled,
                 height = metrics.controlHeight,
                 modifier = Modifier.weight(1f),
@@ -1927,6 +1931,7 @@ private fun ModeButton(
     label: String,
     active: Boolean,
     enabled: Boolean,
+    pending: Boolean = false,
     height: Dp,
     modifier: Modifier = Modifier,
     maxLines: Int = 1,
@@ -1940,17 +1945,22 @@ private fun ModeButton(
         modifier = modifier.height(height),
         shape = ControlCorner,
         contentPadding = PaddingValues(horizontal = 2.dp),
-        border = if (active || alert) null else BorderStroke(1.dp, scheme.outline),
+        border = if (active || alert || pending) null else BorderStroke(1.dp, scheme.outline),
         colors = ButtonDefaults.buttonColors(
             // Green always means the engaged mode, so an alert button turns green
-            // like any other once it is the one flying.
+            // like any other once it is the one flying. Amber sits in between:
+            // asked for, being resent, not yet flown. It outranks the alert
+            // colour because what the button is doing right now matters more
+            // than what it normally warns about.
             containerColor = when {
                 active -> scheme.primary
+                pending -> ModePending
                 alert -> scheme.error
                 else -> scheme.surfaceVariant
             },
             contentColor = when {
                 active -> scheme.onPrimary
+                pending -> OnModePending
                 alert -> Color.White
                 else -> scheme.onSurface
             },
@@ -2099,6 +2109,17 @@ private val TrajectoryColor = Color(0xFFFFD54F)
 
 /** The line to whatever the navigation controller is steering for. */
 private val NavTargetColor = Color(0xFFFF2FD0)
+
+/**
+ * A mode asked for and not yet confirmed.
+ *
+ * The same amber the desktop uses, and the same weight of colour as the
+ * engaged green and RTL's red, so it reads as one of the panel's states
+ * rather than a warning that something is wrong. Dark text on it: white on a
+ * colour this bright is barely there.
+ */
+private val ModePending = Color(0xFFD8B400)
+private val OnModePending = Color(0xFF2A2200)
 
 private fun guideLine(
     points: List<GeoPoint>,

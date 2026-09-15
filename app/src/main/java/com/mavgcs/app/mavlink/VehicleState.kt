@@ -13,6 +13,15 @@ data class VehicleState(
     val customMode: Long = 0L,
     val armed: Boolean = false,
     val systemStatus: String = "—",
+    /**
+     * A mode asked for and not yet seen in a heartbeat, or null.
+     *
+     * On a link that drops a third of what it carries, a press that vanishes
+     * looks exactly like a press that was never made. Holding the request
+     * visible until the aircraft reports the mode means the pilot presses
+     * once and waits, rather than pressing four more times.
+     */
+    val modePending: String? = null,
     // Null until an ATTITUDE arrives. Zero is a perfectly good roll, so a
     // default of 0f would have the panel state the aircraft is level when it
     // is really saying nothing at all.
