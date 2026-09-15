@@ -15,6 +15,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import com.mavgcs.app.ui.FixedCanvas
 import com.mavgcs.app.ui.GcsScreen
 import com.mavgcs.app.ui.SplashLogo
 import com.mavgcs.app.ui.theme.MavGcsTheme
@@ -48,7 +49,10 @@ class MainActivity : ComponentActivity() {
                     if (splash) {
                         SplashLogo()
                     } else {
-                        GcsScreen()
+                        // Composed at the size it was designed for and scaled
+                        // to whatever panel it lands on, as one object. A
+                        // tablet of the intended size gets no transform.
+                        FixedCanvas { GcsScreen() }
                     }
                 }
             }
