@@ -52,6 +52,7 @@ import com.mavgcs.app.mavlink.StreamRates
 import com.mavgcs.app.mavlink.VehicleState
 import com.mavgcs.app.mavlink.TelemetrySettings
 import com.mavgcs.app.terrain.TerrainDiskCache
+import java.util.Locale
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -293,12 +294,12 @@ private fun LinkReadout(vehicle: VehicleState) {
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         LinkFigure("Down", if (live) "${link.rxBytesPerSec} B/s" else "--",
-            if (live) "%.0f msg/s".format(link.rxPerSec) else "")
+            if (live) "%.0f msg/s".format(Locale.ROOT, link.rxPerSec) else "")
         LinkFigure("Up", if (live) "${link.txBytesPerSec} B/s" else "--",
-            if (live) "%.0f msg/s".format(link.txPerSec) else "")
+            if (live) "%.0f msg/s".format(Locale.ROOT, link.txPerSec) else "")
         LinkFigure(
             "Lost",
-            link.lossPercent?.let { "%.1f%%".format(it) } ?: "--",
+            link.lossPercent?.let { "%.1f%%".format(Locale.ROOT, it) } ?: "--",
             if (live) "${link.lost} lost, session" else "",
             // Anything above a few per cent is worth noticing: it is the
             // difference between a rate that was asked for and one that
@@ -312,7 +313,7 @@ private fun LinkReadout(vehicle: VehicleState) {
         )
         LinkFigure(
             "RSSI",
-            vehicle.rssiPercent?.let { "%.0f%%".format(it) } ?: "--",
+            vehicle.rssiPercent?.let { "%.0f%%".format(Locale.ROOT, it) } ?: "--",
             "",
         )
     }

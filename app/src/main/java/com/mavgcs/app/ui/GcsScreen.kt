@@ -331,7 +331,7 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                     .padding(metrics.columnPadding),
                 verticalArrangement = Arrangement.spacedBy(metrics.gap),
             ) {
-                // Held open by the link the pilot opened, not by whether a
+                // Held open by having heard the aircraft once, not by whether a
                 // heartbeat arrived in the last three seconds. A radio that
                 // goes quiet for a few seconds is an ordinary afternoon, and a
                 // panel that disables itself every time is a panel that is not
@@ -342,14 +342,19 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                 // A press that leaves during a gap is not lost either -- a
                 // mode request is held open and resent until the aircraft
                 // confirms it.
+                //
+                // Not the pilot's Connect press, though, which is what this
+                // read until now. That flag says a socket was asked for, not
+                // that anything answered: a mistyped port left ARM lit and
+                // tappable over a link that had never carried a single frame.
                 ArmPad(
-                    enabled = form.listening,
+                    enabled = vehicle.heard,
                     armed = vehicle.armed,
                     metrics = metrics,
                     onCommand = viewModel::command,
                 )
                 FlightModePanel(
-                    enabled = form.listening,
+                    enabled = vehicle.heard,
                     currentMode = vehicle.mode,
                     pendingMode = vehicle.modePending,
                     metrics = metrics,
@@ -358,7 +363,7 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                 )
 
                 GuidedControlPanel(
-                    enabled = form.listening,
+                    enabled = vehicle.heard,
                     metrics = metrics,
                     onSend = viewModel::sendGuided,
                 )
@@ -555,7 +560,7 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                     flyTarget?.takeIf { awaitingFly }?.let { target ->
                         FlyHereBar(
                             target = target,
-                            enabled = form.listening,
+                            enabled = vehicle.heard,
                             onFly = { showFlyDialog = true },
                             onClear = {
                                 flyTarget = null

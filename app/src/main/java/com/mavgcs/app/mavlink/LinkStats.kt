@@ -47,6 +47,20 @@ class LinkStats {
     private companion object {
         /** How many completed seconds the reported loss is measured over. */
         const val LOSS_WINDOW_SECONDS = 10
+
+        /**
+         * The gap above which a jump is read as a sender restart, not a loss.
+         *
+         * There is a real ceiling here and it is worth being honest about
+         * where it comes from. The sequence is a single byte, so it wraps
+         * every 256 messages: at about 22 messages a second, an outage beyond
+         * roughly eleven seconds is genuinely indistinguishable from a short
+         * one, and no arithmetic can recover it. This sits below that, far
+         * enough to count every outage the counter can still describe and
+         * still leave a near-full cycle looking like what it almost certainly
+         * is -- an autopilot that rebooted and started again from zero.
+         */
+        const val RESTART_GAP = 192
     }
 
     private val lock = Any()
@@ -106,7 +120,16 @@ class LinkStats {
                 // that restarted its numbering than 250 lost messages, and
                 // counting it would swamp the figure for the rest of the
                 // flight.
-                if (gap in 1..64) {
+                //
+                // The ceiling used to be 64, which was low enough to throw
+                // away real outages and invert the whole meter: at the rates
+                // this app asks for, the vehicle numbers about 22 messages a
+                // second, so anything over roughly three seconds off the air
+                // exceeded it and was dropped from the count -- and from the
+                // denominator with it. A link that stuttered read a few per
+                // cent while a link that blacked out read zero. A blackout is
+                // the one a pilot needs to see.
+                if (gap < RESTART_GAP) {
                     lost += gap
                     windowLost += gap
                 }

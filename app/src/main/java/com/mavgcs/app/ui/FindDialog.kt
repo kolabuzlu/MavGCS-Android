@@ -50,7 +50,18 @@ fun FindDialog(
     // Tied to the dialog: dismissing cancels the scan with it, rather than
     // leaving a few hundred sockets to finish opening into nothing.
     LaunchedEffect(Unit) {
-        results = LinkScanner.scan(context) { stage = it }
+        // One socket failing must not take the scan down with it. The passes
+        // run as siblings, so an exception in any of them cancels the rest and
+        // comes out here -- and an exception out of a LaunchedEffect is not a
+        // failed scan, it is a crashed composition. Cancellation is left to
+        // propagate, because that one means the dialog was dismissed.
+        results = try {
+            LinkScanner.scan(context) { stage = it }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            emptyList()
+        }
         scanning = false
     }
 

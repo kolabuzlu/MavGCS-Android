@@ -15,6 +15,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -245,6 +246,15 @@ object LinkScanner {
             while (frames < TCP_IDENTIFY_FRAMES && System.currentTimeMillis() < deadline) {
                 val message = connection.next() ?: break
                 frames++
+                // Another ground station's own traffic, forwarded down this
+                // same stream by whatever is serving the port. Passed over so
+                // the hunt continues, exactly as both UDP paths do with it.
+                // Testing it after the loop instead threw the endpoint away on
+                // the strength of one frame: a router carrying a vehicle and a
+                // second GCS would vanish from the list whenever the GCS
+                // happened to be heard first, with the vehicle's own heartbeat
+                // arriving unread a few milliseconds later.
+                if (isGroundStation(message)) continue
                 if (best == null) best = message
                 if (message.payload is Heartbeat) {
                     best = message
@@ -252,7 +262,6 @@ object LinkScanner {
                 }
             }
             val identified = best ?: return null
-            if (isGroundStation(identified)) return null
             Found(
                 type = LinkType.TCP,
                 host = host,
@@ -289,8 +298,11 @@ object LinkScanner {
         // of the two and used to be invisible here.
         val listeners = UDP_PORTS.map { port -> async { listenUdp(port) } }
         val answers = async { askUdp(hosts) }
-        (listeners.awaitAll().flatten() + answers.await())
-            .distinctBy { "${it.udpMode}:${it.host}:${it.port}" }
+        // No deduplication needed between the two halves: the ports are
+        // distinct and each listener answers for one of them, while every
+        // address the active probe reports is a real one rather than the
+        // wildcard, so the two cannot collide.
+        listeners.awaitAll().filterNotNull() + answers.await()
     }
 
     /**
@@ -301,23 +313,40 @@ object LinkScanner {
      * traffic will arrive. The sender is named in the detail rather than in
      * the address, because on the next flight it may well have a different one.
      */
-    private fun listenUdp(port: Int): List<Found> {
+    private suspend fun listenUdp(port: Int): Found? {
         val socket = try {
             DatagramSocket(null).apply {
-                reuseAddress = true
                 soTimeout = 250
                 bind(InetSocketAddress(port))
             }
         } catch (_: Exception) {
             // Already in use, most likely by this app's own live link. Nothing
             // to discover there that the pilot does not already have.
-            return emptyList()
+            //
+            // This is the whole of the protection, which is why the socket no
+            // longer asks to reuse the address. Setting that made the bind
+            // succeed against a port the live link already held, and the two
+            // sockets then divided the vehicle's telemetry between them -- so
+            // pressing Find while flying could take the instruments away for as
+            // long as the scan listened. A port that is busy should look busy.
+            return null
         }
-        val found = mutableMapOf<String, Found>()
+        // One entry per port, not per sender. What this finds is a port to sit
+        // on, and binding it hears everything that arrives there whoever sent
+        // it, so several senders are one answer with several names in it. They
+        // were separate entries until now, each carrying the same wildcard
+        // address and the same port -- which the caller then deduplicated by
+        // exactly those two fields, quietly discarding all but one.
+        val senders = LinkedHashMap<String, String>()
+        val identified = HashSet<String>()
         socket.use {
             val deadline = System.currentTimeMillis() + UDP_LISTEN_MS
             val buffer = ByteArray(2048)
             while (System.currentTimeMillis() < deadline) {
+                // So that dismissing the dialog actually ends the scan. A
+                // blocking receive cannot be interrupted by cancellation, so
+                // the check has to be made between them, as both TCP passes do.
+                currentCoroutineContext().ensureActive()
                 val packet = DatagramPacket(buffer, buffer.size)
                 try {
                     socket.receive(packet)
@@ -329,17 +358,29 @@ object LinkScanner {
                 val message = parse(packet.data, packet.length) ?: continue
                 if (isGroundStation(message)) continue
                 val from = packet.address.hostAddress ?: continue
-                val entry = Found(
-                    type = LinkType.UDP,
-                    udpMode = UdpMode.LISTEN,
-                    host = "0.0.0.0",
-                    port = port,
-                    detail = "from $from · " + describe(message.payload, message.originSystemId),
-                )
-                if (from !in found || message.payload is Heartbeat) found[from] = entry
+                // A heartbeat outranks whatever was recorded first: it is the
+                // frame that says what the thing at the other end actually is.
+                val heartbeat = message.payload is Heartbeat
+                if (from !in senders || (heartbeat && from !in identified)) {
+                    senders[from] = describe(message.payload, message.originSystemId)
+                    if (heartbeat) identified.add(from)
+                }
             }
         }
-        return found.values.toList()
+        if (senders.isEmpty()) return null
+        val detail = if (senders.size == 1) {
+            senders.entries.first().let { "from ${it.key} · ${it.value}" }
+        } else {
+            "from ${senders.size} senders · " +
+                senders.entries.joinToString("; ") { "${it.key} ${it.value}" }
+        }
+        return Found(
+            type = LinkType.UDP,
+            udpMode = UdpMode.LISTEN,
+            host = "0.0.0.0",
+            port = port,
+            detail = detail,
+        )
     }
 
     /**
@@ -350,7 +391,7 @@ object LinkScanner {
      * nothing, and the queue behind an unanswered address swallowed enough of
      * the rest that the one host which would have replied never heard it.
      */
-    private fun askUdp(hosts: List<String>): List<Found> {
+    private suspend fun askUdp(hosts: List<String>): List<Found> {
         val hello = heartbeatFrame()
         val found = mutableMapOf<String, Found>()
         DatagramSocket().use { socket ->
@@ -366,6 +407,9 @@ object LinkScanner {
             val deadline = System.currentTimeMillis() + UDP_LISTEN_MS
             val buffer = ByteArray(2048)
             while (System.currentTimeMillis() < deadline) {
+                // Between receives, for the same reason as the passive side:
+                // this is the only place cancellation can be noticed.
+                currentCoroutineContext().ensureActive()
                 val packet = DatagramPacket(buffer, buffer.size)
                 try {
                     socket.receive(packet)
@@ -377,6 +421,8 @@ object LinkScanner {
                 val message = parse(packet.data, packet.length) ?: continue
                 if (isGroundStation(message)) continue
                 val host = packet.address.hostAddress ?: continue
+                // Keyed by endpoint: a vehicle streaming at 4Hz will answer
+                // several times inside the listening window.
                 val key = "$host:${packet.port}"
                 val entry = Found(
                     type = LinkType.UDP,
@@ -385,6 +431,9 @@ object LinkScanner {
                     port = packet.port,
                     detail = describe(message.payload, message.originSystemId),
                 )
+                // A heartbeat outranks whatever was recorded first, for the same
+                // reason as over TCP: it is the frame that says what the thing
+                // at the other end actually is.
                 if (key !in found || message.payload is Heartbeat) found[key] = entry
             }
         }

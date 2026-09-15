@@ -95,9 +95,32 @@ class MavlinkClient {
 
     private val running = AtomicBoolean(false)
     private val connectionRef = AtomicReference<MavlinkConnection?>(null)
+    /**
+     * Who to address, learned from the vehicle's own heartbeat, or null before
+     * one has arrived.
+     *
+     * Nothing is sent while this is null. It used to fall back to system 1,
+     * component 1 -- harmless only for as long as the panel refused to send
+     * anything before first contact, which stopped being true when the
+     * controls were held open through a blackout. A guess is the wrong thing
+     * to arm: on a routed network with more than one airframe, system 1 is
+     * somebody, and not necessarily the aircraft in front of the pilot.
+     */
     private val target = AtomicReference<Pair<Int, Int>?>(null)
     private var worker: Thread? = null
     private var heartbeat: Thread? = null
+
+    /**
+     * The thread decoding the inbound stream.
+     *
+     * Kept so that disconnect() can reach it. It was left unreferenced, which
+     * meant the only thing that ever stopped it was noticing [running] had gone
+     * false -- and connect() sets that back to true a few statements after
+     * disconnect() returns, so a parse thread that woke inside that window
+     * carried on reading a connection nobody else still had, and writing into
+     * link statistics that had just been reset for the new session.
+     */
+    private var parser: Thread? = null
     private var datagramSocket: DatagramSocket? = null
     // The outstanding mode request. Guarded because it is written from the UI
     // thread and read from the heartbeat thread that resends it.
@@ -153,7 +176,18 @@ class MavlinkClient {
                 // vehicle look identical on the panel -- more so now that
                 // nothing greys out when the link goes quiet -- so the one
                 // case the app can be certain about is worth stating.
-                note("Could not reach ${config.host}:${config.port} — ${reasonFor(error)}")
+                //
+                // Only when the link was not being closed on purpose. Closing
+                // the socket is how disconnect() gets the reader out of a
+                // blocking receive, and that arrives here as an ordinary
+                // SocketException -- so without this test, pressing Disconnect
+                // on a UDP link reported a failure to reach a vehicle that had
+                // been answering perfectly a moment earlier. disconnect()
+                // clears running before it closes anything, which is what
+                // tells the two cases apart.
+                if (running.get()) {
+                    note("Could not reach ${config.host}:${config.port} — ${reasonFor(error)}")
+                }
             } finally {
                 running.set(false)
                 clearModeRequest()
@@ -174,19 +208,34 @@ class MavlinkClient {
         target.set(null)
         worker?.interrupt()
         heartbeat?.interrupt()
+        parser?.interrupt()
         runCatching { datagramSocket?.close() }
         runCatching { tcpSocket?.close() }
         connectionRef.set(null)
         worker = null
         heartbeat = null
+        parser = null
         datagramSocket = null
         tcpSocket = null
-        _state.update { it.copy(linkUp = false, modePending = null) }
+        // The link meter describes a link. With none open there is nothing for
+        // it to describe, and leaving the last live figures there had the
+        // Settings panel reporting a healthy 400 B/s for a connection that
+        // ended minutes ago -- the readout's own liveness test is a session
+        // total, so it never lapsed on its own.
+        linkStats.reset()
+        _state.update {
+            it.copy(
+                linkUp = false,
+                modePending = null,
+                link = LinkQuality(),
+                rssiPercent = null,
+            )
+        }
     }
 
     fun send(command: GcsCommand) {
         val connection = connectionRef.get() ?: return
-        val (sys, comp) = target.get() ?: (1 to 1)
+        val (sys, comp) = target.get() ?: return
         val snapshot = _state.value
         tx.execute {
             try {
@@ -244,7 +293,7 @@ class MavlinkClient {
     /** Commands an explicit ArduPilot custom mode, used by the Flight Mode panel. */
     fun setFlightMode(label: String, customMode: Long) {
         val connection = connectionRef.get() ?: return
-        val (sys, comp) = target.get() ?: (1 to 1)
+        val (sys, comp) = target.get() ?: return
         tx.execute {
             try {
                 sendModeChange(connection, sys, comp, customMode)
@@ -410,7 +459,7 @@ class MavlinkClient {
 
     private fun guided(description: String, block: (MavlinkConnection, Int, Int) -> Unit) {
         val connection = connectionRef.get() ?: return
-        val (sys, comp) = target.get() ?: (1 to 1)
+        val (sys, comp) = target.get() ?: return
         tx.execute {
             try {
                 block(connection, sys, comp)
@@ -447,28 +496,45 @@ class MavlinkClient {
         val output = object : OutputStream() {
             override fun write(b: Int) = write(byteArrayOf(b.toByte()))
             override fun write(b: ByteArray, off: Int, len: Int) {
+                // Counted here, on the far side of the decision, rather than in
+                // a wrapper above it. In LISTEN mode there is no peer until
+                // something speaks first, and this returns quietly until then.
+                // A counter outside could see only the call and not the
+                // silence, which had the link meter reporting an uplink of
+                // 21 B/s on the same screen that said no vehicle had ever been
+                // heard -- the two new readings contradicting each other, and
+                // the wrong one being the reassuring one.
                 val dest = remote.get() ?: return
                 socket.send(DatagramPacket(b, off, len, dest.address, dest.port))
+                linkStats.onTx(len, frame = true)
             }
         }
         startConnection(input, output)
         val buffer = ByteArray(2048)
-        while (running.get() && !Thread.currentThread().isInterrupted) {
-            try {
-                val packet = DatagramPacket(buffer, buffer.size)
-                socket.receive(packet)
-                if (config.udpMode == UdpMode.LISTEN) {
-                    // Whoever just spoke is who to answer. When dialling out the
-                    // peer is the one that was asked for, whatever port it
-                    // happens to reply from.
-                    remote.set(InetSocketAddress(packet.address, packet.port))
+        // Closed however this ends, including the way it usually ends: the
+        // socket being shut under a blocked receive, which throws straight past
+        // here. Without the finally, the queue was never closed and the parse
+        // thread reading it stayed blocked on a poll that would never return
+        // again -- one stranded thread for every UDP session of the run.
+        try {
+            while (running.get() && !Thread.currentThread().isInterrupted) {
+                try {
+                    val packet = DatagramPacket(buffer, buffer.size)
+                    socket.receive(packet)
+                    if (config.udpMode == UdpMode.LISTEN) {
+                        // Whoever just spoke is who to answer. When dialling out
+                        // the peer is the one that was asked for, whatever port
+                        // it happens to reply from.
+                        remote.set(InetSocketAddress(packet.address, packet.port))
+                    }
+                    input.offer(buffer.copyOf(packet.length))
+                } catch (_: java.net.SocketTimeoutException) {
+                    checkStale()
                 }
-                input.offer(buffer.copyOf(packet.length))
-            } catch (_: java.net.SocketTimeoutException) {
-                checkStale()
             }
+        } finally {
+            input.close()
         }
-        input.close()
     }
 
     private fun runTcp(config: LinkConfig) {
@@ -476,7 +542,7 @@ class MavlinkClient {
         socket.connect(InetSocketAddress(config.host, config.port), 5000)
         socket.tcpNoDelay = true
         tcpSocket = socket
-        startConnection(socket.getInputStream(), socket.getOutputStream())
+        startConnection(socket.getInputStream(), counting(socket.getOutputStream()))
         while (running.get() && !socket.isClosed) {
             Thread.sleep(500)
             checkStale()
@@ -484,7 +550,10 @@ class MavlinkClient {
     }
 
     private fun startConnection(input: InputStream, output: OutputStream) {
-        val connection = MavlinkConnection.create(input, counting(output))
+        // [output] is expected to count its own transmitted bytes. TCP is
+        // wrapped by the caller; UDP counts inside its own writer, because only
+        // that writer knows whether a datagram had anywhere to go.
+        val connection = MavlinkConnection.create(input, output)
         connectionRef.set(connection)
         val opened = System.currentTimeMillis()
         var silenceReported = false
@@ -520,10 +589,19 @@ class MavlinkClient {
                 Thread.currentThread().interrupt()
             }
         }
-        thread(name = "mavlink-parse", isDaemon = true) {
+        parser = thread(name = "mavlink-parse", isDaemon = true) {
             try {
                 while (running.get() && !Thread.currentThread().isInterrupted) {
-                    val message = runCatching { connection.next() }.getOrNull() ?: continue
+                    // Out of the loop when the stream ends, not round it again.
+                    // The library drops frames it cannot parse by itself and
+                    // throws only when the stream is finished or broken, so
+                    // there is nothing here to recover from by retrying. This
+                    // was a continue, and a TCP peer that had closed made
+                    // next() throw instantly and forever: a daemon thread at
+                    // 100% of a core for the rest of the flight, because a
+                    // socket reports itself open long after the other end has
+                    // gone, and nothing on the panel said otherwise.
+                    val message = runCatching { connection.next() }.getOrNull() ?: break
                     // Counted before it is read, and by sender, because the
                     // sequence gap that reveals a loss only means anything
                     // against the last frame from that same sender.
@@ -537,6 +615,15 @@ class MavlinkClient {
                     }
                     // A malformed message must not be fatal either.
                     runCatching { onMessage(connection, message) }
+                }
+                // Reached by the break above, so only when the stream ended
+                // under us rather than because the pilot asked. Worth saying:
+                // a vehicle that stops talking and a server that hung up look
+                // identical on a panel that deliberately holds its last
+                // reading, and this is the half the app can be sure about.
+                if (running.get()) {
+                    running.set(false)
+                    note("The link closed at the other end.")
                 }
             } catch (_: InterruptedException) {
                 Thread.currentThread().interrupt()
@@ -758,6 +845,15 @@ class MavlinkClient {
         val firstContact = target.getAndSet(
             message.originSystemId to message.originComponentId,
         ) == null
+        // Read off this heartbeat, above the block that needs it. It used to be
+        // worked out below, after the stream rates had already been sent, which
+        // left those rates deciding what to ask a PX4 for while still believing
+        // the firmware was unknown.
+        val firmware = when {
+            autopilotName.contains("ARDUPILOT") -> Firmware.ARDUPILOT
+            autopilotName.contains("PX4") -> Firmware.PX4
+            else -> Firmware.UNKNOWN
+        }
         if (firstContact) {
             // Order matters, and getting it wrong silently undid everything
             // below. REQUEST_DATA_STREAM is the old blunt instrument: one rate
@@ -775,12 +871,7 @@ class MavlinkClient {
             requestStreams(connection, message.originSystemId, message.originComponentId)
             // Only once the vehicle has said who it is: every request has to be
             // addressed to it.
-            applyStreamRates(streamRates)
-        }
-        val firmware = when {
-            autopilotName.contains("ARDUPILOT") -> Firmware.ARDUPILOT
-            autopilotName.contains("PX4") -> Firmware.PX4
-            else -> Firmware.UNKNOWN
+            applyStreamRates(streamRates, firmware)
         }
         val vehicleType = typeName.removePrefix("MAV_TYPE_").ifBlank { "TYPE $typeValue" }
         val mode = when (firmware) {
@@ -883,7 +974,7 @@ class MavlinkClient {
         restart: Boolean = true,
     ) {
         val connection = connectionRef.get() ?: return
-        val (sys, comp) = target.get() ?: (1 to 1)
+        val (sys, comp) = target.get() ?: return
         if (waypoints.isEmpty()) {
             return
         }
@@ -932,7 +1023,7 @@ class MavlinkClient {
      */
     fun clearMission() {
         val connection = connectionRef.get() ?: return
-        val (sys, comp) = target.get() ?: (1 to 1)
+        val (sys, comp) = target.get() ?: return
         tx.execute {
             resetMission()
             runCatching {
@@ -968,7 +1059,7 @@ class MavlinkClient {
     /** The vehicle answering one step of the upload conversation. */
     private fun onMissionAck(payload: MissionAck) {
         val connection = connectionRef.get() ?: return
-        val (sys, comp) = target.get() ?: (1 to 1)
+        val (sys, comp) = target.get() ?: return
         val state = synchronized(missionLock) { missionState } ?: return
         when (state) {
             MissionState.AWAITING_CLEAR_ACK -> {
@@ -1036,7 +1127,7 @@ class MavlinkClient {
     /** The vehicle asking for one item. Either request message may be used. */
     private fun onMissionRequest(seq: Int) {
         val connection = connectionRef.get() ?: return
-        val (sys, comp) = target.get() ?: (1 to 1)
+        val (sys, comp) = target.get() ?: return
         val point = synchronized(missionLock) {
             if (missionState != MissionState.UPLOADING) {
                 return
@@ -1081,7 +1172,21 @@ class MavlinkClient {
      * annotations rather than being written out here, so they cannot drift
      * from the dialect being spoken.
      */
-    fun applyStreamRates(rates: StreamRates) {
+    fun applyStreamRates(rates: StreamRates) =
+        applyStreamRates(rates, _state.value.firmware)
+
+    /**
+     * [firmware] is passed rather than read, because the one caller that
+     * matters knows it before the state does.
+     *
+     * On first contact this is called from inside the heartbeat that identifies
+     * the vehicle, several statements before that heartbeat publishes what it
+     * learned. Reading the published value here meant reading UNKNOWN every
+     * time -- so the firmware test below was dead on exactly the connection it
+     * was written for, and only ever came true later, if the pilot happened to
+     * open Settings and change a rate.
+     */
+    private fun applyStreamRates(rates: StreamRates, firmware: Firmware) {
         streamRates = rates
         val connection = connectionRef.get() ?: return
         val (sys, comp) = target.get() ?: return
@@ -1095,18 +1200,20 @@ class MavlinkClient {
                         .forEach { intervals[it] = 0 }
                 } else {
                     SUPPORTING_RATES.forEach { (type, hz) -> intervals[type] = intervalFor(hz) }
-                    // The wind estimate arrives as WIND on ArduPilot and as
-                    // WIND_COV on PX4, and neither firmware implements the
-                    // other's. Asking for the one it does not have earns a
-                    // complaint back on every connect, so it is left out
-                    // rather than disabled -- there is nothing there to turn
-                    // off.
-                    if (_state.value.firmware == Firmware.PX4) {
-                        intervals.remove(Wind::class.java)
-                    }
                     intervals[Attitude::class.java] = intervalFor(rates.attitudeHz)
                     intervals[GlobalPositionInt::class.java] = intervalFor(rates.positionHz)
                     DISABLED_MESSAGES.forEach { intervals[it] = -1 }
+                }
+                // The wind estimate arrives as WIND on ArduPilot and as
+                // WIND_COV on PX4, and neither firmware implements the
+                // other's. Asking for the one it does not have earns a
+                // complaint back on every connect, so it is left out rather
+                // than disabled -- there is nothing there to turn off.
+                //
+                // Outside the branch, because "full rates" asks for every key
+                // in the table and so asked PX4 for WIND too.
+                if (firmware == Firmware.PX4) {
+                    intervals.remove(Wind::class.java)
                 }
                 intervals.forEach { (type, interval) ->
                     messageId(type)?.let { id ->

@@ -99,7 +99,20 @@ data class VehicleState(
     val ekfTint: HealthTint? = null,
     val vibeTint: HealthTint? = null,
     val statusLog: List<String> = emptyList(),
-)
+) {
+    /**
+     * Whether a vehicle has ever identified itself on this link.
+     *
+     * Latches on the first heartbeat and stays on for the life of the
+     * connection, because it answers "is there an aircraft at the other end of
+     * this" and not "did one speak in the last three seconds". That is the
+     * distinction the panel needs: the controls must not go dead every time a
+     * radio stutters, and they must not be live before there is anything to
+     * send to. [systemId] is zero until a heartbeat sets it and connect()
+     * replaces the whole state, so it is already per-session.
+     */
+    val heard: Boolean get() = systemId != 0
+}
 
 enum class Firmware {
     UNKNOWN,
