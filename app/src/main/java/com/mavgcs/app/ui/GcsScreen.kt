@@ -211,6 +211,7 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
     var showFlyDialog by remember { mutableStateOf(false) }
     var showFlyToLatLon by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
+    var showFind by remember { mutableStateOf(false) }
     // Points the pilot has clicked but not yet sent, and the batch that was
     // sent last -- kept apart so Update knows what is actually on the vehicle.
     var queueWaypoints by remember { mutableStateOf(false) }
@@ -396,6 +397,7 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                             viewModel.toggleConnection(TelemetrySettings.current(appContext))
                         },
                         onSettings = { showSettings = true },
+                        onFind = { showFind = true },
                         modifier = Modifier
                             .width(340.dp)
                             .height(TopPanelHeight),
@@ -604,6 +606,22 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
         SettingsDialog(
             onDismiss = { showSettings = false },
             onRatesChanged = viewModel::applyStreamRates,
+        )
+    }
+
+    if (showFind) {
+        FindDialog(
+            onDismiss = { showFind = false },
+            // Fill the form rather than connect outright. A mis-tap in a list
+            // is cheap; a mis-tap that opens a link to the wrong vehicle is
+            // not, and Connect is right there.
+            onPick = { found ->
+                viewModel.setType(found.type)
+                viewModel.setUdpMode(found.udpMode)
+                viewModel.setHost(found.host)
+                viewModel.setPort(found.port.toString())
+                showFind = false
+            },
         )
     }
 
@@ -1295,6 +1313,7 @@ private fun ConnectionPanel(
     onToggle: () -> Unit,
     onUdpMode: (UdpMode) -> Unit,
     onSettings: () -> Unit,
+    onFind: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -1324,6 +1343,15 @@ private fun ConnectionPanel(
                 )
             }
             Spacer(Modifier.weight(1f))
+            // Find, beside Settings and built the same way so the pair reads
+            // as one set of panel controls rather than two separate things.
+            OutlinedButton(
+                onClick = onFind,
+                modifier = Modifier.size(SegmentedHeight),
+                contentPadding = PaddingValues(0.dp),
+            ) {
+                Text("F", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            }
             OutlinedButton(
                 onClick = onSettings,
                 modifier = Modifier.size(SegmentedHeight),
