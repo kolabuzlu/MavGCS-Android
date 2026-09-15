@@ -101,6 +101,9 @@ class MavlinkClient {
     private var datagramSocket: DatagramSocket? = null
     // The outstanding mode request. Guarded because it is written from the UI
     // thread and read from the heartbeat thread that resends it.
+    /** Throughput and loss on the live link. See [LinkStats]. */
+    private val linkStats = LinkStats()
+
     private val modeLock = Any()
     private var modeWanted: String? = null
     private var modeWantedCustom: Long = 0L
@@ -134,6 +137,7 @@ class MavlinkClient {
         streamRates = rates
         disconnect()
         running.set(true)
+        linkStats.reset()
         _state.value = VehicleState()
         worker = thread(name = "mavlink-rx", isDaemon = true) {
             try {
@@ -454,7 +458,7 @@ class MavlinkClient {
     }
 
     private fun startConnection(input: InputStream, output: OutputStream) {
-        val connection = MavlinkConnection.create(input, output)
+        val connection = MavlinkConnection.create(input, counting(output))
         connectionRef.set(connection)
         heartbeat = thread(name = "mavlink-hb", isDaemon = true) {
             // disconnect() interrupts this thread, which makes the sleep throw.
@@ -464,6 +468,10 @@ class MavlinkClient {
                 while (running.get() && !Thread.currentThread().isInterrupted) {
                     runCatching { tx.execute { runCatching { sendHeartbeat(connection) } } }
                     runCatching { driveModeRequest() }
+                    runCatching {
+                        val sample = linkStats.sample(System.currentTimeMillis())
+                        _state.update { it.copy(link = sample) }
+                    }
                     Thread.sleep(HEARTBEAT_INTERVAL_MS)
                 }
             } catch (_: InterruptedException) {
@@ -474,6 +482,17 @@ class MavlinkClient {
             try {
                 while (running.get() && !Thread.currentThread().isInterrupted) {
                     val message = runCatching { connection.next() }.getOrNull() ?: continue
+                    // Counted before it is read, and by sender, because the
+                    // sequence gap that reveals a loss only means anything
+                    // against the last frame from that same sender.
+                    runCatching {
+                        linkStats.onRx(
+                            message.rawBytes.size,
+                            message.originSystemId,
+                            message.originComponentId,
+                            message.sequence,
+                        )
+                    }
                     // A malformed message must not be fatal either.
                     runCatching { onMessage(connection, message) }
                 }
@@ -554,6 +573,13 @@ class MavlinkClient {
                     altMslM = payload.alt(),
                     climbMs = payload.climb(),
                 )
+            }
+            // The receiver's signal strength, 0..254, with 255 meaning it has
+            // nothing to report -- which is not the same as no signal, and is
+            // what a MAVLink-injected RC link leaves there.
+            is RcChannels -> _state.update {
+                val raw = payload.rssi()
+                it.copy(rssiPercent = if (raw >= 255) null else raw * 100f / 254f)
             }
             is SysStatus -> _state.update {
                 it.copy(
@@ -1027,6 +1053,15 @@ class MavlinkClient {
                         .forEach { intervals[it] = 0 }
                 } else {
                     SUPPORTING_RATES.forEach { (type, hz) -> intervals[type] = intervalFor(hz) }
+                    // The wind estimate arrives as WIND on ArduPilot and as
+                    // WIND_COV on PX4, and neither firmware implements the
+                    // other's. Asking for the one it does not have earns a
+                    // complaint back on every connect, so it is left out
+                    // rather than disabled -- there is nothing there to turn
+                    // off.
+                    if (_state.value.firmware == Firmware.PX4) {
+                        intervals.remove(Wind::class.java)
+                    }
                     intervals[Attitude::class.java] = intervalFor(rates.attitudeHz)
                     intervals[GlobalPositionInt::class.java] = intervalFor(rates.positionHz)
                     DISABLED_MESSAGES.forEach { intervals[it] = -1 }
@@ -1072,6 +1107,29 @@ class MavlinkClient {
         if (hz > 0f) (1_000_000f / hz).toInt() else -1
 
     /** The id the dialect gives this message, straight off its own annotation. */
+    /**
+     * The same stream, with what passes through it counted.
+     *
+     * Wrapped here rather than counted at each of the thirteen places that
+     * send something, so nothing can be added later that quietly escapes the
+     * tally. The library serialises a frame and writes it in one call, which
+     * is what lets an array write stand for a message.
+     */
+    private fun counting(output: OutputStream): OutputStream = object : OutputStream() {
+        override fun write(b: Int) {
+            output.write(b)
+            linkStats.onTx(1, frame = false)
+        }
+
+        override fun write(b: ByteArray, off: Int, len: Int) {
+            output.write(b, off, len)
+            linkStats.onTx(len, frame = true)
+        }
+
+        override fun flush() = output.flush()
+        override fun close() = output.close()
+    }
+
     private fun messageId(type: Class<*>): Int? =
         runCatching { type.getAnnotation(MavlinkMessageInfo::class.java)?.id }.getOrNull()
 
@@ -1199,6 +1257,17 @@ class MavlinkClient {
             Vibration::class.java to 0.5f,
             ScaledPressure::class.java to 0.5f, // QNH
             MissionCurrent::class.java to 1f, // which waypoint is being flown
+            // The only thing either firmware will tell us about the radio.
+            // Neither ArduPilot nor PX4 puts link quality or signal-to-noise
+            // in any standard MAVLink field, so the receiver's RSSI is the
+            // whole of what can be known, and this is the message carrying it.
+            RcChannels::class.java to 1f,
+            // Home is announced once, at arming. Once is no guarantee at all
+            // on a radio that drops packets, and missing it means no home
+            // marker and no distance-to-home for the rest of the flight. The
+            // explicit request on connect still goes out; this is the slow
+            // repeat that catches the case where the answer to it was lost.
+            HomePosition::class.java to 0.2f,
             Rangefinder::class.java to 1f,
             DistanceSensor::class.java to 0.5f,
         )
@@ -1225,7 +1294,6 @@ class MavlinkClient {
             ScaledImu3::class.java,
             ScaledPressure2::class.java,
             ServoOutputRaw::class.java,
-            RcChannels::class.java,
             Meminfo::class.java,
             PowerStatus::class.java,
             LocalPositionNed::class.java,
@@ -1246,7 +1314,12 @@ class MavlinkClient {
          * 11030 ESC_TELEMETRY_1_TO_4, 4Hz and 220 B/s of it.
          * 295   AIRSPEED, whose figure VFR_HUD already carries.
          */
-        private val DISABLED_MESSAGE_IDS: List<Int> = listOf(11030, 295)
+        private val DISABLED_MESSAGE_IDS: List<Int> = listOf(
+            11030, // ESC_TELEMETRY_1_TO_4
+            295, // AIRSPEED
+            143, // SCALED_PRESSURE3
+            165, // HWSTATUS
+        )
 
         private const val MAX_VEHICLE_MESSAGES = 200
         private const val MAV_MODE_FLAG_CUSTOM_MODE_ENABLED = 1

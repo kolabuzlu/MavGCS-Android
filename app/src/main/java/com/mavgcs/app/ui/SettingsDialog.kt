@@ -49,6 +49,7 @@ import com.mavgcs.app.cache.TERRAIN_CACHE_LIMITS
 import com.mavgcs.app.cache.formatCacheSize
 import com.mavgcs.app.mavlink.CesiumSettings
 import com.mavgcs.app.mavlink.StreamRates
+import com.mavgcs.app.mavlink.VehicleState
 import com.mavgcs.app.mavlink.TelemetrySettings
 import com.mavgcs.app.terrain.TerrainDiskCache
 import kotlin.math.roundToInt
@@ -80,7 +81,11 @@ private enum class CacheKind(val title: String, val noun: String) {
  * honest about what is actually saved.
  */
 @Composable
-fun SettingsDialog(onDismiss: () -> Unit, onRatesChanged: (StreamRates) -> Unit) {
+fun SettingsDialog(
+    vehicle: VehicleState,
+    onDismiss: () -> Unit,
+    onRatesChanged: (StreamRates) -> Unit,
+) {
     val context = LocalContext.current
     var mapLimit by remember { mutableStateOf(MapTileCache.limitMb()) }
     var terrainLimit by remember { mutableStateOf(TerrainDiskCache.limitMb()) }
@@ -165,6 +170,7 @@ fun SettingsDialog(onDismiss: () -> Unit, onRatesChanged: (StreamRates) -> Unit)
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                LinkReadout(vehicle)
                 RateRow(
                     label = "Attitude",
                     hz = attitudeHz,
@@ -264,6 +270,71 @@ fun SettingsDialog(onDismiss: () -> Unit, onRatesChanged: (StreamRates) -> Unit)
 }
 
 /** One telemetry rate, as the handful of choices a radio link can carry. */
+/**
+ * What the link is doing right now, beside the knobs that decide it.
+ *
+ * Put here rather than on the panel because it is a thing to look at while
+ * setting the rates, not while flying: the question it answers is whether what
+ * has been asked for fits down the radio, and the moment to ask that is the
+ * moment you are choosing.
+ *
+ * The figure that matters most is the first one. A radio has a fixed budget --
+ * an ELRS downlink is 435 bytes a second, doubled on dual band -- and asking
+ * for more than it can carry does not slow the link down, it makes the radio
+ * throw away the difference without regard for which messages mattered.
+ */
+@Composable
+private fun LinkReadout(vehicle: VehicleState) {
+    val scheme = MaterialTheme.colorScheme
+    val link = vehicle.link
+    val live = vehicle.link.received > 0
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        LinkFigure("Down", if (live) "${link.rxBytesPerSec} B/s" else "--",
+            if (live) "%.0f msg/s".format(link.rxPerSec) else "")
+        LinkFigure("Up", if (live) "${link.txBytesPerSec} B/s" else "--",
+            if (live) "%.0f msg/s".format(link.txPerSec) else "")
+        LinkFigure(
+            "Lost",
+            link.lossPercent?.let { "%.1f%%".format(it) } ?: "--",
+            if (live) "${link.lost} lost, session" else "",
+            // Anything above a few per cent is worth noticing: it is the
+            // difference between a rate that was asked for and one that
+            // arrives.
+            tint = when {
+                link.lossPercent == null -> scheme.onSurfaceVariant
+                link.lossPercent!! >= 10f -> scheme.error
+                link.lossPercent!! >= 3f -> Color(0xFFD8B400)
+                else -> scheme.primary
+            },
+        )
+        LinkFigure(
+            "RSSI",
+            vehicle.rssiPercent?.let { "%.0f%%".format(it) } ?: "--",
+            "",
+        )
+    }
+}
+
+@Composable
+private fun LinkFigure(label: String, value: String, note: String, tint: Color? = null) {
+    val scheme = MaterialTheme.colorScheme
+    Column {
+        Text(label, fontSize = 10.sp, color = scheme.onSurfaceVariant)
+        Text(
+            text = value,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium,
+            color = tint ?: scheme.onSurface,
+        )
+        if (note.isNotEmpty()) {
+            Text(note, fontSize = 9.sp, color = scheme.onSurfaceVariant)
+        }
+    }
+}
+
 @Composable
 private fun RateRow(
     label: String,

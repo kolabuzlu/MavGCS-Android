@@ -644,6 +644,7 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
 
     if (showSettings) {
         SettingsDialog(
+            vehicle = vehicle,
             onDismiss = { showSettings = false },
             onRatesChanged = viewModel::applyStreamRates,
         )

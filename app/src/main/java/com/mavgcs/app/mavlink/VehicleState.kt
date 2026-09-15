@@ -22,6 +22,15 @@ data class VehicleState(
      * once and waits, rather than pressing four more times.
      */
     val modePending: String? = null,
+    /** What the link is carrying and losing. See [LinkStats]. */
+    val link: LinkQuality = LinkQuality(),
+    /**
+     * Receiver signal strength as a percentage, or null when there is no RC
+     * link to report. ArduPilot and PX4 expose only this over MAVLink -- no
+     * link quality or signal-to-noise figure in any standard field -- so it is
+     * the whole of what can be said about the radio from here.
+     */
+    val rssiPercent: Float? = null,
     // Null until an ATTITUDE arrives. Zero is a perfectly good roll, so a
     // default of 0f would have the panel state the aircraft is level when it
     // is really saying nothing at all.
