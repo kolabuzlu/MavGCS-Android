@@ -9,13 +9,13 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
+import kotlin.math.min
+import kotlin.math.roundToInt
 
 /**
  * The master: the 12.7in tablet this ground station was drawn for, exactly as
@@ -33,38 +33,39 @@ private const val MasterWidthDp = 1385
 private const val MasterHeightDp = 866
 
 /**
- * Draw the panel as the master draws it, then scale that picture to the screen.
+ * Draw the master's picture at whatever size the screen can hold it.
  *
  * The layout is a fixed composition and is meant to stay one. Anything that
- * adapts rearranges it: a column wraps, a panel slides under its neighbour,
- * an instrument shrinks while the one beside it does not. So nothing inside is
- * allowed to know it is anywhere else.
+ * adapts rearranges it: a column wraps, a panel slides under its neighbour, an
+ * instrument shrinks while the one beside it does not. So nothing inside is
+ * allowed to know it is anywhere else. It is measured at the master's
+ * proportions and told the master's configuration, and composes exactly what
+ * the master composes.
  *
- * Constraining the size is not enough on its own. The screen tells a layout
- * about itself in three ways -- the space it is given, the density that turns
- * dp into pixels, and the configuration it can ask for directly -- and this
- * panel reads the third. Given 1385dp of room on a screen the configuration
- * called 1007dp wide, it sized its columns for the small number and drew a
- * different picture, which was then scaled down again. So all three are
- * replaced here: the content is measured at the master's pixel size, with the
- * master's density, and told the master's configuration. What it composes is
- * then identical to what the master composes, down to the rounding.
+ * The size comes from the density rather than from a transform, and that
+ * distinction is the whole of this file.
  *
- * The picture then fills the glass, which means the two axes scale
- * independently when the screen is not the master's shape. A 12.7in tablet is
- * 1.600 wide for its height and the 8.7in one is 1.675, so the picture is
- * stretched about five per cent across on that panel. Deliberate: bars sized
- * to hold the shape would have been thirty pixels down each side, and a
- * ground station is worth more filling the screen than it loses to five per
- * cent. Worth knowing where it shows -- a circle is that much wider than it
- * is tall, so the compass rose and the horizon's bank angles carry the same
- * error.
+ * A graphicsLayer scale is the obvious way to shrink a finished picture, and
+ * it works for everything Compose draws itself. It does not work for a view
+ * borrowed from the platform, and this panel has two of them: the map and the
+ * 3D view. Compose delivers a touch to such a view by moving the event by the
+ * view's position on screen -- a translation, with no scale in it -- so on a
+ * scaled panel the map was told a point much nearer its top left corner than
+ * the finger actually was. Tapping to fly somewhere dropped the waypoint a
+ * couple of hundred pixels up and to the left, by an amount that grew with the
+ * distance from the corner.
  *
- * What does not change is the composition. Every element keeps its size,
- * position and proportion relative to every other, because all of them are
- * stretched by the same amount at the same time.
+ * Changing the density instead means there is no transform to miss. Every
+ * element is laid out and drawn at real screen pixels, so a borrowed view gets
+ * its own coordinates and the text is rasterised at the size it is shown
+ * rather than resampled from a larger one.
  *
- * The master itself takes a path with no transform on it at all.
+ * The cost is that a density is one number, so both axes must share it. A
+ * screen of a different shape keeps the master's proportions and takes a bar
+ * at two edges instead of a stretch. That is not a preference -- it is the
+ * price of the map knowing where it was touched.
+ *
+ * The master itself takes a path that changes nothing at all.
  */
 @Composable
 fun FixedCanvas(
@@ -85,8 +86,15 @@ fun FixedCanvas(
             return@BoxWithConstraints
         }
 
-        val scaleX = screenWidth.toFloat() / MasterWidthPx
-        val scaleY = screenHeight.toFloat() / MasterHeightPx
+        val scale = min(
+            screenWidth.toFloat() / MasterWidthPx,
+            screenHeight.toFloat() / MasterHeightPx,
+        )
+        // The same composition, drawn smaller: at this density the master's
+        // 1385.4 x 865.9dp comes out exactly the size below.
+        val density = MasterDensity * scale
+        val width = (MasterWidthPx * scale).roundToInt()
+        val height = (MasterHeightPx * scale).roundToInt()
 
         val configuration = LocalConfiguration.current
         val masterConfiguration = remember(configuration) {
@@ -99,34 +107,17 @@ fun FixedCanvas(
         }
 
         Box(
-            Modifier
-                // Measure at the master's pixel size and put it in the
-                // corner, while telling the parent this fills the screen.
-                //
-                // By hand rather than with requiredSize, because a child
-                // larger than its parent is centred on the way in -- which put
-                // a quarter of the panel off the top and left and left the
-                // opposite corner empty.
-                .layout { measurable, incoming ->
-                    val placeable = measurable.measure(
-                        Constraints.fixed(MasterWidthPx, MasterHeightPx),
-                    )
-                    layout(incoming.maxWidth, incoming.maxHeight) {
-                        placeable.place(0, 0)
-                    }
+            Modifier.layout { measurable, incoming ->
+                val placeable = measurable.measure(Constraints.fixed(width, height))
+                val left = ((incoming.maxWidth - width) / 2f).roundToInt()
+                val top = ((incoming.maxHeight - height) / 2f).roundToInt()
+                layout(incoming.maxWidth, incoming.maxHeight) {
+                    placeable.place(left, top)
                 }
-                // Inside the placement, so it scales the drawing without
-                // changing the measured size that placement depends on.
-                .graphicsLayer {
-                    this.scaleX = scaleX
-                    this.scaleY = scaleY
-                    // From the top left, so the picture grows from the corner
-                    // it was put in rather than about its own middle.
-                    transformOrigin = TransformOrigin(0f, 0f)
-                },
+            },
         ) {
             CompositionLocalProvider(
-                LocalDensity provides Density(MasterDensity, 1f),
+                LocalDensity provides Density(density, 1f),
                 LocalConfiguration provides masterConfiguration,
             ) {
                 content()
