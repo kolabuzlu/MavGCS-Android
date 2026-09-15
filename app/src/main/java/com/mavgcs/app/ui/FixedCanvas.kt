@@ -16,8 +16,6 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
-import kotlin.math.min
-import kotlin.math.roundToInt
 
 /**
  * The master: the 12.7in tablet this ground station was drawn for, exactly as
@@ -52,10 +50,19 @@ private const val MasterHeightDp = 866
  * master's density, and told the master's configuration. What it composes is
  * then identical to what the master composes, down to the rounding.
  *
- * One scale for both axes, never two, so the proportions are the master's
- * proportions. A screen of a different shape gets bars rather than a stretch.
- * The artificial horizon is reason enough on its own: an attitude read off a
- * squashed one is wrong by however much it was squashed.
+ * The picture then fills the glass, which means the two axes scale
+ * independently when the screen is not the master's shape. A 12.7in tablet is
+ * 1.600 wide for its height and the 8.7in one is 1.675, so the picture is
+ * stretched about five per cent across on that panel. Deliberate: bars sized
+ * to hold the shape would have been thirty pixels down each side, and a
+ * ground station is worth more filling the screen than it loses to five per
+ * cent. Worth knowing where it shows -- a circle is that much wider than it
+ * is tall, so the compass rose and the horizon's bank angles carry the same
+ * error.
+ *
+ * What does not change is the composition. Every element keeps its size,
+ * position and proportion relative to every other, because all of them are
+ * stretched by the same amount at the same time.
  *
  * The master itself takes a path with no transform on it at all.
  */
@@ -78,25 +85,23 @@ fun FixedCanvas(
             return@BoxWithConstraints
         }
 
-        val scale = min(
-            screenWidth.toFloat() / MasterWidthPx,
-            screenHeight.toFloat() / MasterHeightPx,
-        )
+        val scaleX = screenWidth.toFloat() / MasterWidthPx
+        val scaleY = screenHeight.toFloat() / MasterHeightPx
 
         val configuration = LocalConfiguration.current
         val masterConfiguration = remember(configuration) {
             Configuration(configuration).apply {
                 screenWidthDp = MasterWidthDp
                 screenHeightDp = MasterHeightDp
-                smallestScreenWidthDp = min(MasterWidthDp, MasterHeightDp)
+                smallestScreenWidthDp = MasterHeightDp
                 densityDpi = MasterDensityDpi
             }
         }
 
         Box(
             Modifier
-                // Measure at the master's pixel size and centre what comes
-                // back, while telling the parent this fills the screen.
+                // Measure at the master's pixel size and put it in the
+                // corner, while telling the parent this fills the screen.
                 //
                 // By hand rather than with requiredSize, because a child
                 // larger than its parent is centred on the way in -- which put
@@ -106,19 +111,17 @@ fun FixedCanvas(
                     val placeable = measurable.measure(
                         Constraints.fixed(MasterWidthPx, MasterHeightPx),
                     )
-                    val left = ((incoming.maxWidth - MasterWidthPx * scale) / 2f).roundToInt()
-                    val top = ((incoming.maxHeight - MasterHeightPx * scale) / 2f).roundToInt()
                     layout(incoming.maxWidth, incoming.maxHeight) {
-                        placeable.place(left, top)
+                        placeable.place(0, 0)
                     }
                 }
                 // Inside the placement, so it scales the drawing without
                 // changing the measured size that placement depends on.
                 .graphicsLayer {
-                    scaleX = scale
-                    scaleY = scale
-                    // From the top left, so the picture grows from where it
-                    // was put rather than about its own middle.
+                    this.scaleX = scaleX
+                    this.scaleY = scaleY
+                    // From the top left, so the picture grows from the corner
+                    // it was put in rather than about its own middle.
                     transformOrigin = TransformOrigin(0f, 0f)
                 },
         ) {
