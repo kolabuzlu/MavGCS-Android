@@ -691,6 +691,20 @@ class MavlinkClient {
             message.originSystemId to message.originComponentId,
         ) == null
         if (firstContact) {
+            // Order matters, and getting it wrong silently undid everything
+            // below. REQUEST_DATA_STREAM is the old blunt instrument: one rate
+            // for a whole group of messages, and ALL means every group. It is
+            // kept because firmware too old for per-message intervals still
+            // understands it, but ArduPilot rebuilds its message schedule from
+            // the stream rates when it arrives -- so sent afterwards it wipes
+            // the intervals set here, every one of them, and puts the disabled
+            // messages back on air.
+            //
+            // It went second until now, which is why the rates in Settings
+            // appeared to do nothing on a fresh connection: the app asked for
+            // exactly what it wanted and then immediately asked for everything
+            // at 4Hz instead.
+            requestStreams(connection, message.originSystemId, message.originComponentId)
             // Only once the vehicle has said who it is: every request has to be
             // addressed to it.
             applyStreamRates(streamRates)
@@ -738,7 +752,6 @@ class MavlinkClient {
             )
         }
         if (first) {
-            requestStreams(connection, message.originSystemId, message.originComponentId)
             Log.i(TAG, "Vehicle ${message.originSystemId} online")
         }
     }
