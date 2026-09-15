@@ -90,6 +90,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
@@ -366,8 +368,34 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                     .fillMaxHeight(),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                // These two draw their border a title's half height below
+                // their own top, because the title sits astride the line.
+                // The panel to the left carries no title and so begins at
+                // its edge, which left the three tops out of line by exactly
+                // that reserve.
+                //
+                // Lifting the row by it brings the lines level, and the row
+                // gives up the same height in return, so the map below grows
+                // into the gap instead of everything shifting down.
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        // Measured with the height it would have had, so the
+                        // two panels keep their size, then reported one title
+                        // reserve shorter and drawn that much higher. The map
+                        // below takes up the difference.
+                        .layout { measurable, constraints ->
+                            val lift = TitleLine.roundToPx()
+                            val placeable = measurable.measure(
+                                constraints.copy(
+                                    minHeight = 0,
+                                    maxHeight = Constraints.Infinity,
+                                ),
+                            )
+                            layout(placeable.width, placeable.height - lift) {
+                                placeable.place(0, -lift)
+                            }
+                        },
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     Column(
