@@ -1478,23 +1478,36 @@ class MavlinkClient {
         )
 
         /**
-         * Streamed by ArduPilot, never read here, and absent from the MAVLink
-         * library this is built against, so they can only be named by number.
+         * Streamed by ArduPilot, never read here, and silenced by number
+         * rather than by class.
          *
-         * Measured on a plane at the rates this app asks for, these two were
-         * 316 B/s of an 891 B/s stream -- a third of everything the vehicle
-         * sent, for data nothing displays. On a link with room to spare that
-         * is merely wasteful; on ELRS at 435 B/s it is most of the budget,
-         * and the radio drops whatever overflows without caring which.
+         * Measured on a plane at the rates this app asks for, the first two
+         * below were 316 B/s of an 891 B/s stream -- a third of everything the
+         * vehicle sent, for data nothing displays. On a link with room to
+         * spare that is merely wasteful; on ELRS at 435 B/s it is most of the
+         * budget, and the radio drops whatever overflows without caring which.
          *
          * 11030 ESC_TELEMETRY_1_TO_4, 4Hz and 220 B/s of it.
          * 295   AIRSPEED, whose figure VFR_HUD already carries.
+         * 143   SCALED_PRESSURE3, a third barometer nothing reads.
+         *
+         * Every id here must be one the firmware can actually schedule.
+         * ArduPilot maps a MAVLink id to an internal slot before it will
+         * change a rate, and for an id with no slot it answers "No ap_message
+         * for mavlink id (n)" -- which lands in the pilot's message panel on
+         * every connect, for a message that was never being sent in the first
+         * place. So an obsolete id costs a complaint and saves nothing.
+         *
+         * 165 HWSTATUS was in this list and is the reason that is written
+         * down. It was deprecated in 2022 in favour of POWER_STATUS and its
+         * slot is commented out in ArduPilot's own table, so asking to turn it
+         * off produced exactly that line on every connection. 182 AHRS3 is
+         * obsolete the same way and must not be added either.
          */
         private val DISABLED_MESSAGE_IDS: List<Int> = listOf(
             11030, // ESC_TELEMETRY_1_TO_4
             295, // AIRSPEED
             143, // SCALED_PRESSURE3
-            165, // HWSTATUS
         )
 
         private const val MAX_VEHICLE_MESSAGES = 200
