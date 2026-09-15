@@ -1,105 +1,133 @@
 package com.mavgcs.app.ui
 
+import android.content.res.Configuration
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Constraints
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.dp
-import kotlin.math.abs
+import androidx.compose.ui.unit.Density
+import kotlin.math.min
+import kotlin.math.roundToInt
 
 /**
- * The panel this ground station was drawn for, and the master every other
- * screen is a scaled copy of: a 12.7in tablet at 2944x1840 and 340dpi, which
- * is 1385.4117 x 865.8823 in density independent pixels.
+ * The master: the 12.7in tablet this ground station was drawn for, exactly as
+ * it reports itself.
  *
- * Measured on the device rather than worked out from the specification, so
- * that tablet lands exactly on these numbers and takes the untouched path.
+ * Read off the device rather than worked out from the specification, because
+ * Android's own rounding is what the layout actually sees -- 1840 pixels at
+ * 2.125 is 865.88dp, and the configuration says 866.
  */
-val DesignWidth: Dp = 1385.4117.dp
-val DesignHeight: Dp = 865.8823.dp
+private const val MasterWidthPx = 2944
+private const val MasterHeightPx = 1840
+private const val MasterDensity = 2.125f
+private const val MasterDensityDpi = 340
+private const val MasterWidthDp = 1385
+private const val MasterHeightDp = 866
 
 /**
- * How far a screen may differ from the master before it is worth scaling.
+ * Draw the panel as the master draws it, then scale that picture to the screen.
  *
- * Half a dp is below anything visible, and the point of it is that a panel of
- * the intended size takes the untouched path -- no transform, no resampling,
- * nothing between the layout and the glass.
- */
-private const val TOLERANCE_DP = 0.5f
-
-/**
- * Lay the whole instrument panel out at the master size, then scale that to fit.
+ * The layout is a fixed composition and is meant to stay one. Anything that
+ * adapts rearranges it: a column wraps, a panel slides under its neighbour,
+ * an instrument shrinks while the one beside it does not. So nothing inside is
+ * allowed to know it is anywhere else.
  *
- * Every other way of handling a second screen size rearranges something: a
- * column wraps, a panel slides under its neighbour, one instrument shrinks
- * while the one beside it does not. This cannot, because nothing inside ever
- * learns the screen changed. The layout is composed against the master's
- * dimensions and the finished result is scaled as a single object, the way a
- * photograph is scaled: every element keeps its size, position and proportion
- * relative to every other.
+ * Constraining the size is not enough on its own. The screen tells a layout
+ * about itself in three ways -- the space it is given, the density that turns
+ * dp into pixels, and the configuration it can ask for directly -- and this
+ * panel reads the third. Given 1385dp of room on a screen the configuration
+ * called 1007dp wide, it sized its columns for the small number and drew a
+ * different picture, which was then scaled down again. So all three are
+ * replaced here: the content is measured at the master's pixel size, with the
+ * master's density, and told the master's configuration. What it composes is
+ * then identical to what the master composes, down to the rounding.
  *
- * The two axes scale independently, so a screen of a different shape stretches
- * rather than letterboxing. A deliberate trade -- filling the glass matters
- * more here than keeping circles perfectly round.
+ * One scale for both axes, never two, so the proportions are the master's
+ * proportions. A screen of a different shape gets bars rather than a stretch.
+ * The artificial horizon is reason enough on its own: an attitude read off a
+ * squashed one is wrong by however much it was squashed.
  *
- * A screen already the master size gets no transform at all.
+ * The master itself takes a path with no transform on it at all.
  */
 @Composable
 fun FixedCanvas(
     modifier: Modifier = Modifier,
-    designWidth: Dp = DesignWidth,
-    designHeight: Dp = DesignHeight,
     content: @Composable () -> Unit,
 ) {
     BoxWithConstraints(modifier.fillMaxSize().clipToBounds()) {
-        val needsScaling =
-            abs(maxWidth.value - designWidth.value) > TOLERANCE_DP ||
-                abs(maxHeight.value - designHeight.value) > TOLERANCE_DP
-        if (!needsScaling) {
-            // The panel it was drawn for. Hand the content straight through,
-            // so that tablet does not differ by one pixel.
+        val screenWidth = constraints.maxWidth
+        val screenHeight = constraints.maxHeight
+        val isMaster = screenWidth == MasterWidthPx &&
+            screenHeight == MasterHeightPx &&
+            LocalDensity.current.density == MasterDensity
+
+        if (isMaster) {
+            // The panel it was drawn for. Straight through, so that tablet
+            // does not differ by a single pixel.
             content()
             return@BoxWithConstraints
         }
 
-        val scaleX = maxWidth / designWidth
-        val scaleY = maxHeight / designHeight
+        val scale = min(
+            screenWidth.toFloat() / MasterWidthPx,
+            screenHeight.toFloat() / MasterHeightPx,
+        )
+
+        val configuration = LocalConfiguration.current
+        val masterConfiguration = remember(configuration) {
+            Configuration(configuration).apply {
+                screenWidthDp = MasterWidthDp
+                screenHeightDp = MasterHeightDp
+                smallestScreenWidthDp = min(MasterWidthDp, MasterHeightDp)
+                densityDpi = MasterDensityDpi
+            }
+        }
+
         Box(
             Modifier
-                // Measure the content at the master size and put it in the
-                // corner, while reporting to the parent that this fills the
-                // screen.
+                // Measure at the master's pixel size and centre what comes
+                // back, while telling the parent this fills the screen.
                 //
-                // Done by hand rather than with requiredSize, because a child
-                // larger than its parent gets centred on the way in: that put
-                // a quarter of the panel off the top and left, and left the
+                // By hand rather than with requiredSize, because a child
+                // larger than its parent is centred on the way in -- which put
+                // a quarter of the panel off the top and left and left the
                 // opposite corner empty.
-                .layout { measurable, constraints ->
+                .layout { measurable, incoming ->
                     val placeable = measurable.measure(
-                        Constraints.fixed(designWidth.roundToPx(), designHeight.roundToPx()),
+                        Constraints.fixed(MasterWidthPx, MasterHeightPx),
                     )
-                    layout(constraints.maxWidth, constraints.maxHeight) {
-                        placeable.place(0, 0)
+                    val left = ((incoming.maxWidth - MasterWidthPx * scale) / 2f).roundToInt()
+                    val top = ((incoming.maxHeight - MasterHeightPx * scale) / 2f).roundToInt()
+                    layout(incoming.maxWidth, incoming.maxHeight) {
+                        placeable.place(left, top)
                     }
                 }
-                // Inside that, so it scales the drawing without changing the
-                // measured size the placement above depends on.
+                // Inside the placement, so it scales the drawing without
+                // changing the measured size that placement depends on.
                 .graphicsLayer {
-                    this.scaleX = scaleX
-                    this.scaleY = scaleY
-                    // From the top left corner, so the result starts there
-                    // rather than about its own middle.
+                    scaleX = scale
+                    scaleY = scale
+                    // From the top left, so the picture grows from where it
+                    // was put rather than about its own middle.
                     transformOrigin = TransformOrigin(0f, 0f)
                 },
         ) {
-            content()
+            CompositionLocalProvider(
+                LocalDensity provides Density(MasterDensity, 1f),
+                LocalConfiguration provides masterConfiguration,
+            ) {
+                content()
+            }
         }
     }
 }
