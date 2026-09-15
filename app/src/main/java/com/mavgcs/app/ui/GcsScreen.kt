@@ -1371,47 +1371,64 @@ private fun ConnectionPanel(
         title = "Connection",
         modifier = modifier,
     ) {
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            SegmentedChoice(
-                options = listOf(LinkType.UDP to "UDP", LinkType.TCP to "TCP"),
-                selected = form.type,
-                onSelect = onType,
-            )
-            // Which way round the UDP link goes. TCP has only one answer, so
-            // the question is not asked there.
-            if (form.type == LinkType.UDP) {
+        // Two groups anchored to opposite edges rather than one row of five.
+        //
+        // As a single row they shared the width, and choosing UDP adds a
+        // segmented control to the left of it: the row then had barely enough
+        // space, the gap before the last button was squeezed out, and the Find
+        // button slid one gap to the right. Switching back to TCP slid it
+        // back. Anchoring the pair to the trailing edge puts them beyond the
+        // reach of whatever the left-hand side is doing, so they hold still.
+        Box(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier.align(Alignment.CenterStart),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 SegmentedChoice(
-                    options = listOf(
-                        UdpMode.LISTEN to "Listen",
-                        UdpMode.CONNECT to "Connect To",
-                    ),
-                    selected = form.udpMode,
-                    onSelect = onUdpMode,
+                    options = listOf(LinkType.UDP to "UDP", LinkType.TCP to "TCP"),
+                    selected = form.type,
+                    onSelect = onType,
                 )
+                // Which way round the UDP link goes. TCP has only one answer,
+                // so the question is not asked there.
+                if (form.type == LinkType.UDP) {
+                    SegmentedChoice(
+                        options = listOf(
+                            UdpMode.LISTEN to "Listen",
+                            UdpMode.CONNECT to "Connect To",
+                        ),
+                        selected = form.udpMode,
+                        onSelect = onUdpMode,
+                    )
+                }
             }
-            Spacer(Modifier.weight(1f))
-            // Find, beside Settings and built the same way so the pair reads
-            // as one set of panel controls rather than two separate things.
-            OutlinedButton(
-                onClick = onFind,
-                modifier = Modifier.size(SegmentedHeight),
-                contentPadding = PaddingValues(0.dp),
+            Row(
+                modifier = Modifier.align(Alignment.CenterEnd),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("F", fontSize = 14.sp, fontWeight = FontWeight.Medium)
-            }
-            OutlinedButton(
-                onClick = onSettings,
-                modifier = Modifier.size(SegmentedHeight),
-                contentPadding = PaddingValues(0.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Settings,
-                    contentDescription = "Settings",
-                    modifier = Modifier.size(18.dp),
-                )
+                // Find, beside Settings and built the same way so the pair
+                // reads as one set of panel controls rather than two separate
+                // things.
+                OutlinedButton(
+                    onClick = onFind,
+                    modifier = Modifier.size(SegmentedHeight),
+                    contentPadding = PaddingValues(0.dp),
+                ) {
+                    Text("F", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                }
+                OutlinedButton(
+                    onClick = onSettings,
+                    modifier = Modifier.size(SegmentedHeight),
+                    contentPadding = PaddingValues(0.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Settings,
+                        contentDescription = "Settings",
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
             }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
