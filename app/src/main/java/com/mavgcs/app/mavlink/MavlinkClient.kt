@@ -552,8 +552,11 @@ class MavlinkClient {
     private fun startConnection(input: InputStream, output: OutputStream) {
         // [output] is expected to count its own transmitted bytes. TCP is
         // wrapped by the caller; UDP counts inside its own writer, because only
-        // that writer knows whether a datagram had anywhere to go.
-        val connection = MavlinkConnection.create(input, output)
+        // that writer knows whether a datagram had anywhere to go. The inbound
+        // side is wrapped here instead, because both transports need the same
+        // treatment and neither can do it further up: what arrives has to be
+        // counted before the parser is free to throw any of it away.
+        val connection = MavlinkConnection.create(counting(input), output)
         connectionRef.set(connection)
         val opened = System.currentTimeMillis()
         var silenceReported = false
@@ -602,17 +605,14 @@ class MavlinkClient {
                     // socket reports itself open long after the other end has
                     // gone, and nothing on the panel said otherwise.
                     val message = runCatching { connection.next() }.getOrNull() ?: break
-                    // Counted before it is read, and by sender, because the
-                    // sequence gap that reveals a loss only means anything
-                    // against the last frame from that same sender.
-                    runCatching {
-                        linkStats.onRx(
-                            message.rawBytes.size,
-                            message.originSystemId,
-                            message.originComponentId,
-                            message.sequence,
-                        )
-                    }
+                    // Nothing is counted here any more. It used to be, and it
+                    // could only ever count what survived parsing -- which is
+                    // the wrong population to measure a radio by, and meant
+                    // asking the library for the raw frame, which hands back a
+                    // fresh copy of every message purely so its length can be
+                    // read and the copy dropped. Both went away together when
+                    // the counting moved down to the stream itself.
+                    //
                     // A malformed message must not be fatal either.
                     runCatching { onMessage(connection, message) }
                 }
@@ -1264,6 +1264,33 @@ class MavlinkClient {
      * tally. The library serialises a frame and writes it in one call, which
      * is what lets an array write stand for a message.
      */
+    /**
+     * The same stream, with the frames crossing it counted.
+     *
+     * Safe to count here, at the very bottom, even though the reader above
+     * rewinds itself constantly: it does that by pushing bytes back into a
+     * buffer of its own, so each byte is drawn from this stream exactly once
+     * however many times the parser reconsiders it.
+     */
+    private fun counting(input: InputStream): InputStream = object : InputStream() {
+        private val frames = FrameCounter(linkStats)
+
+        override fun read(): Int {
+            val value = input.read()
+            if (value >= 0) frames.byte(value)
+            return value
+        }
+
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            val read = input.read(b, off, len)
+            for (i in 0 until read) frames.byte(b[off + i].toInt())
+            return read
+        }
+
+        override fun available(): Int = input.available()
+        override fun close() = input.close()
+    }
+
     private fun counting(output: OutputStream): OutputStream = object : OutputStream() {
         override fun write(b: Int) {
             output.write(b)
@@ -1572,5 +1599,105 @@ private class PacketInputStream : InputStream() {
     override fun close() {
         closed.set(true)
         queue.clear()
+    }
+}
+
+/**
+ * Finds frame boundaries in a raw MAVLink byte stream.
+ *
+ * This exists because the measurement has to happen before the library gets a
+ * look at the stream. The library discards any frame it cannot put a name to,
+ * and the sequence number of a discarded frame is spent all the same -- so
+ * counting parsed messages instead made a hole in the numbering that the loss
+ * meter then reported as a lost packet. On a link dropping nothing at all,
+ * with ArduPilot streaming the one message this dialect has no class for, that
+ * read 11.2%. The bytes of those frames went uncounted for the same reason,
+ * which pushed the throughput figure the other way.
+ *
+ * Only the header is read. A frame announces its own length, so there is no
+ * need to understand what it carries -- which is the entire point, since the
+ * frames that matter here are the ones nothing can understand.
+ */
+private class FrameCounter(private val stats: LinkStats) {
+    private companion object {
+        const val MAGIC_V1 = 0xFE
+        const val MAGIC_V2 = 0xFD
+
+        /** Header, checksum and, on v2, the optional signature. */
+        const val OVERHEAD_V1 = 8
+        const val OVERHEAD_V2 = 12
+        const val SIGNATURE_BYTES = 13
+    }
+
+    /** Bytes taken from the current frame, magic included. Zero means hunting. */
+    private var index = 0
+    private var v2 = false
+    private var total = 0
+    private var seq = 0
+    private var sys = 0
+    private var comp = 0
+
+    /**
+     * A frame is complete but not yet counted.
+     *
+     * Held back one byte on purpose. Frames run back to back, so the byte after
+     * one must begin the next; if it does not, this was never a frame and the
+     * reader had latched onto a payload byte that happened to look like a
+     * marker. That happens whenever a connection opens partway through a frame,
+     * which over TCP to a running simulator is the normal case, and without
+     * this check the mistake would go on inventing losses rather than
+     * correcting itself.
+     */
+    private var pending = false
+    private var pendingTotal = 0
+    private var pendingSeq = 0
+    private var pendingSys = 0
+    private var pendingComp = 0
+
+    fun reset() {
+        index = 0
+        pending = false
+    }
+
+    fun byte(value: Int) {
+        val b = value and 0xFF
+        if (pending) {
+            pending = false
+            if (b == MAGIC_V1 || b == MAGIC_V2) {
+                stats.onRx(pendingTotal, pendingSys, pendingComp, pendingSeq)
+            } else {
+                // Out of step. Drop the supposed frame and hunt for a marker.
+                index = 0
+                return
+            }
+        }
+        if (index == 0) {
+            when (b) {
+                MAGIC_V2 -> { v2 = true; index = 1 }
+                MAGIC_V1 -> { v2 = false; index = 1 }
+            }
+            return
+        }
+        when {
+            index == 1 -> total = b + if (v2) OVERHEAD_V2 else OVERHEAD_V1
+            // The low bit of the incompatibility flags is the one that adds a
+            // signature to the end, and so changes how long the frame is.
+            v2 && index == 2 -> if (b and 0x01 != 0) total += SIGNATURE_BYTES
+            v2 && index == 4 -> seq = b
+            v2 && index == 5 -> sys = b
+            v2 && index == 6 -> comp = b
+            !v2 && index == 2 -> seq = b
+            !v2 && index == 3 -> sys = b
+            !v2 && index == 4 -> comp = b
+        }
+        index += 1
+        if (index >= total) {
+            pendingTotal = total
+            pendingSeq = seq
+            pendingSys = sys
+            pendingComp = comp
+            pending = true
+            index = 0
+        }
     }
 }
