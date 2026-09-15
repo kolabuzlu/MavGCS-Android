@@ -1041,7 +1041,6 @@ class MavlinkClient {
                             param1 = id.toFloat(),
                             param2 = interval.toFloat(),
                         )
-                        pauseBetweenCommands()
                     }
                 }
                 // By number, because these postdate the MAVLink library this
@@ -1057,7 +1056,6 @@ class MavlinkClient {
                         param1 = id.toFloat(),
                         param2 = unwantedInterval,
                     )
-                    pauseBetweenCommands()
                 }
                 Log.i(
                     TAG,
@@ -1074,20 +1072,6 @@ class MavlinkClient {
         if (hz > 0f) (1_000_000f / hz).toInt() else -1
 
     /** The id the dialect gives this message, straight off its own annotation. */
-    /**
-     * A gap between the rate commands, because there are thirty of them.
-     *
-     * ArduPilot handles COMMAND_LONG one at a time and drops what arrives
-     * while it is busy. Fired as a burst, some of these are silently lost --
-     * which is why one message stayed at 4Hz while its neighbours in the same
-     * list went quiet. Nothing reports the loss, so the settings look applied
-     * and are not. Paced, the whole set lands; it costs a second, once, at
-     * connect.
-     */
-    private fun pauseBetweenCommands() {
-        runCatching { Thread.sleep(RATE_COMMAND_GAP_MS) }
-    }
-
     private fun messageId(type: Class<*>): Int? =
         runCatching { type.getAnnotation(MavlinkMessageInfo::class.java)?.id }.getOrNull()
 
@@ -1285,9 +1269,6 @@ class MavlinkClient {
         private const val HEARTBEAT_INTERVAL_MS = 1000L
 
         /** How often an unconfirmed mode request goes back on the wire. */
-        /** Spacing between the stream-rate commands. See pauseBetweenCommands. */
-        private const val RATE_COMMAND_GAP_MS = 40L
-
         private const val MODE_RETRY_EVERY_MS = 1000L
 
         /**
