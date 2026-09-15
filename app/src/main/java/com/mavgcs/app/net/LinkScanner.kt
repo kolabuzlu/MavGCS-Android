@@ -168,7 +168,7 @@ object LinkScanner {
         // UDP last: it is one broadside of datagrams and then a wait, so it
         // has a floor on how fast it can be and does not parallelise away.
         onStage("Listening for UDP")
-        found.addAll(probeUdp(hosts + "127.0.0.1"))
+        found.addAll(probeUdp(alive.toList() + "127.0.0.1"))
 
         found.sortedWith(compareBy({ it.type.ordinal }, { it.host }, { it.port }))
     }
@@ -252,6 +252,7 @@ object LinkScanner {
                 }
             }
             val identified = best ?: return null
+            if (isGroundStation(identified)) return null
             Found(
                 type = LinkType.TCP,
                 host = host,
@@ -276,7 +277,80 @@ object LinkScanner {
      * socket sends them all and then listens, because the reply comes back to
      * whichever port the probe left from.
      */
-    private fun probeUdp(hosts: List<String>): List<Found> {
+    private suspend fun probeUdp(hosts: List<String>): List<Found> = coroutineScope {
+        // Two ways round, because UDP links come in two shapes and only one of
+        // them can be asked a question.
+        //
+        // A vehicle that waits to be spoken to is found by speaking: send the
+        // heartbeat this app sends anyway and see what answers. A vehicle -- or
+        // a bridge, or a radio -- that simply streams at a port is found only
+        // by listening at that port, because it is not waiting for anything and
+        // will never reply to a probe. The second is the commoner arrangement
+        // of the two and used to be invisible here.
+        val listeners = UDP_PORTS.map { port -> async { listenUdp(port) } }
+        val answers = async { askUdp(hosts) }
+        (listeners.awaitAll().flatten() + answers.await())
+            .distinctBy { "${it.udpMode}:${it.host}:${it.port}" }
+    }
+
+    /**
+     * Bind a port and see whether anything is already streaming at it.
+     *
+     * What this finds is not an address to dial but a port to sit on, so it is
+     * reported as the listening end: bind everything, this port, and the
+     * traffic will arrive. The sender is named in the detail rather than in
+     * the address, because on the next flight it may well have a different one.
+     */
+    private fun listenUdp(port: Int): List<Found> {
+        val socket = try {
+            DatagramSocket(null).apply {
+                reuseAddress = true
+                soTimeout = 250
+                bind(InetSocketAddress(port))
+            }
+        } catch (_: Exception) {
+            // Already in use, most likely by this app's own live link. Nothing
+            // to discover there that the pilot does not already have.
+            return emptyList()
+        }
+        val found = mutableMapOf<String, Found>()
+        socket.use {
+            val deadline = System.currentTimeMillis() + UDP_LISTEN_MS
+            val buffer = ByteArray(2048)
+            while (System.currentTimeMillis() < deadline) {
+                val packet = DatagramPacket(buffer, buffer.size)
+                try {
+                    socket.receive(packet)
+                } catch (_: SocketTimeoutException) {
+                    continue
+                } catch (_: Exception) {
+                    break
+                }
+                val message = parse(packet.data, packet.length) ?: continue
+                if (isGroundStation(message)) continue
+                val from = packet.address.hostAddress ?: continue
+                val entry = Found(
+                    type = LinkType.UDP,
+                    udpMode = UdpMode.LISTEN,
+                    host = "0.0.0.0",
+                    port = port,
+                    detail = "from $from · " + describe(message.payload, message.originSystemId),
+                )
+                if (from !in found || message.payload is Heartbeat) found[from] = entry
+            }
+        }
+        return found.values.toList()
+    }
+
+    /**
+     * Say hello on every candidate port and collect the replies.
+     *
+     * Only to addresses the sweep already found something at. Firing at all
+     * 254 of them was a burst of eight hundred datagrams, most of them at
+     * nothing, and the queue behind an unanswered address swallowed enough of
+     * the rest that the one host which would have replied never heard it.
+     */
+    private fun askUdp(hosts: List<String>): List<Found> {
         val hello = heartbeatFrame()
         val found = mutableMapOf<String, Found>()
         DatagramSocket().use { socket ->
@@ -301,20 +375,16 @@ object LinkScanner {
                     break
                 }
                 val message = parse(packet.data, packet.length) ?: continue
+                if (isGroundStation(message)) continue
                 val host = packet.address.hostAddress ?: continue
-                // Keyed by endpoint: a vehicle streaming at 4Hz will answer
-                // several times inside the listening window.
                 val key = "$host:${packet.port}"
                 val entry = Found(
                     type = LinkType.UDP,
+                    udpMode = UdpMode.CONNECT,
                     host = host,
                     port = packet.port,
-                    udpMode = UdpMode.CONNECT,
                     detail = describe(message.payload, message.originSystemId),
                 )
-                // A heartbeat outranks whatever was recorded first, for the
-                // same reason as over TCP: it is the frame that says what the
-                // thing at the other end actually is.
                 if (key !in found || message.payload is Heartbeat) found[key] = entry
             }
         }
@@ -335,6 +405,25 @@ object LinkScanner {
             .build()
         connection.send2(GCS_SYSTEM_ID, GCS_COMPONENT_ID, heartbeat)
         return sink.toByteArray()
+    }
+
+    /**
+     * Is this our own voice, or another ground station's?
+     *
+     * The active probe sends a heartbeat to every live address, and this
+     * tablet is one of them, so the ports the passive side just bound hear the
+     * probe come straight back -- the scan finding itself, three times over.
+     * Another ground station on the network is filtered for the same reason
+     * as a matter of course: neither is something to fly.
+     */
+    private fun isGroundStation(message: io.dronefleet.mavlink.MavlinkMessage<*>): Boolean {
+        if (message.originSystemId == GCS_SYSTEM_ID &&
+            message.originComponentId == GCS_COMPONENT_ID
+        ) {
+            return true
+        }
+        val payload = message.payload
+        return payload is Heartbeat && payload.type().entry() == MavType.MAV_TYPE_GCS
     }
 
     /** One datagram, parsed with the CRC checked, or null if it is not MAVLink. */
