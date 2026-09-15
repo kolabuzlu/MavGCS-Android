@@ -149,6 +149,11 @@ class MavlinkClient {
                 Thread.currentThread().interrupt()
             } catch (error: Exception) {
                 Log.w(TAG, "Link error: ${error.message ?: error.javaClass.simpleName}")
+                // Said out loud, not just logged. A refused port and a quiet
+                // vehicle look identical on the panel -- more so now that
+                // nothing greys out when the link goes quiet -- so the one
+                // case the app can be certain about is worth stating.
+                note("Could not reach ${config.host}:${config.port} — ${reasonFor(error)}")
             } finally {
                 running.set(false)
                 clearModeRequest()
@@ -308,6 +313,27 @@ class MavlinkClient {
         }
     }
 
+    /**
+     * The short version of why a link would not open.
+     *
+     * Android's own text runs to a full line of local port numbers and
+     * millisecond counts around the one word that matters, and this goes in a
+     * panel four lines tall shared with the vehicle's own messages.
+     */
+    private fun reasonFor(error: Throwable): String {
+        val text = error.message.orEmpty()
+        return when {
+            text.contains("ECONNREFUSED", true) || error is java.net.ConnectException ->
+                "nothing is listening there"
+            text.contains("EHOSTUNREACH", true) || text.contains("ENETUNREACH", true) ->
+                "no route to that address"
+            error is java.net.SocketTimeoutException || text.contains("timeout", true) ->
+                "timed out"
+            text.contains("EACCES", true) -> "permission denied"
+            else -> error.javaClass.simpleName
+        }
+    }
+
     /** A line for the Messages panel that did not come from the vehicle. */
     private fun note(text: String) {
         _state.update { current ->
@@ -460,6 +486,8 @@ class MavlinkClient {
     private fun startConnection(input: InputStream, output: OutputStream) {
         val connection = MavlinkConnection.create(input, counting(output))
         connectionRef.set(connection)
+        val opened = System.currentTimeMillis()
+        var silenceReported = false
         heartbeat = thread(name = "mavlink-hb", isDaemon = true) {
             // disconnect() interrupts this thread, which makes the sleep throw.
             // An uncaught exception on any thread takes the whole process down
@@ -471,6 +499,20 @@ class MavlinkClient {
                     runCatching {
                         val sample = linkStats.sample(System.currentTimeMillis())
                         _state.update { it.copy(link = sample) }
+                    }
+                    // A socket that opened onto nothing. Said once: the
+                    // address was probably wrong, and repeating it every
+                    // second would bury the log it is written into.
+                    if (!silenceReported &&
+                        target.get() == null &&
+                        System.currentTimeMillis() - opened > SILENT_LINK_MS
+                    ) {
+                        silenceReported = true
+                        note(
+                            "Link is open but no vehicle has been heard in " +
+                                "${SILENT_LINK_MS / 1000} seconds. Check the address, " +
+                                "the port, and that the vehicle is powered.",
+                        )
                     }
                     Thread.sleep(HEARTBEAT_INTERVAL_MS)
                 }
@@ -1342,6 +1384,15 @@ class MavlinkClient {
         private const val HEARTBEAT_INTERVAL_MS = 1000L
 
         /** How often an unconfirmed mode request goes back on the wire. */
+        /**
+         * How long a link may be open and silent before saying so.
+         *
+         * Long enough that a vehicle still booting is not accused of being
+         * absent, short enough to catch a mistyped port before the pilot has
+         * given up on it.
+         */
+        private const val SILENT_LINK_MS = 10_000L
+
         private const val MODE_RETRY_EVERY_MS = 1000L
 
         /**
