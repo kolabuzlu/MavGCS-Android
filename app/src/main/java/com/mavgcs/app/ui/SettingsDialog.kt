@@ -11,7 +11,9 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
@@ -111,7 +113,17 @@ fun SettingsDialog(onDismiss: () -> Unit, onRatesChanged: (StreamRates) -> Unit)
         onDismissRequest = onDismiss,
         title = { Text("Settings") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            // Scrollable, because a dialog's text slot is not.
+            //
+            // Material caps the dialog to the window and then clips whatever
+            // does not fit, with no indication that anything was cut. This
+            // content outgrew a landscape tablet's height when the 3D view
+            // section arrived, and the terrain cache controls at the bottom
+            // simply vanished — present, reachable by nothing.
+            Column(
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+            ) {
                 Text(
                     text = "3D view",
                     fontSize = 13.sp,
