@@ -331,14 +331,25 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                     .padding(metrics.columnPadding),
                 verticalArrangement = Arrangement.spacedBy(metrics.gap),
             ) {
+                // Held open by the link the pilot opened, not by whether a
+                // heartbeat arrived in the last three seconds. A radio that
+                // goes quiet for a few seconds is an ordinary afternoon, and a
+                // panel that disables itself every time is a panel that is not
+                // there when it is wanted. Nothing on this screen changes
+                // because the link went quiet: the instruments hold their last
+                // reading and the controls stay where they were.
+                //
+                // A press that leaves during a gap is not lost either -- a
+                // mode request is held open and resent until the aircraft
+                // confirms it.
                 ArmPad(
-                    enabled = vehicle.linkUp,
+                    enabled = form.listening,
                     armed = vehicle.armed,
                     metrics = metrics,
                     onCommand = viewModel::command,
                 )
                 FlightModePanel(
-                    enabled = vehicle.linkUp,
+                    enabled = form.listening,
                     currentMode = vehicle.mode,
                     pendingMode = vehicle.modePending,
                     metrics = metrics,
@@ -347,7 +358,7 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                 )
 
                 GuidedControlPanel(
-                    enabled = vehicle.linkUp,
+                    enabled = form.listening,
                     metrics = metrics,
                     onSend = viewModel::sendGuided,
                 )
@@ -544,7 +555,7 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                     flyTarget?.takeIf { awaitingFly }?.let { target ->
                         FlyHereBar(
                             target = target,
-                            enabled = vehicle.linkUp,
+                            enabled = form.listening,
                             onFly = { showFlyDialog = true },
                             onClear = {
                                 flyTarget = null
@@ -741,7 +752,11 @@ private fun EtaReadout(vehicle: VehicleState, modifier: Modifier = Modifier) {
  * as "arrived" if it were let through.
  */
 private fun etaValue(vehicle: VehicleState): String {
-    if (!vehicle.linkUp || vehicle.mode !in EtaNavModes) {
+    // Deliberately not gated on the link being live. The figures it works
+    // from are the last ones that arrived, and a reading that blanks the
+    // moment a radio stutters is worse than one that holds and is a few
+    // seconds old, which every other number here already does.
+    if (vehicle.mode !in EtaNavModes) {
         return "--"
     }
     val distance = vehicle.distToWpM ?: return "--"
