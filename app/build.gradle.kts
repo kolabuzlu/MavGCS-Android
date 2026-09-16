@@ -101,6 +101,10 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:1.4.1")
     implementation("androidx.media3:media3-exoplayer-rtsp:1.4.1")
     implementation("androidx.media3:media3-ui:1.4.1")
+    // QR encoding only. Hand rolling it means Reed-Solomon, masking and
+    // format bits, and a code that is subtly wrong looks fine and will not
+    // scan -- which is the one failure this feature cannot afford.
+    implementation("com.google.zxing:core:3.5.3")
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
 }

@@ -220,6 +220,10 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
     var awaitingFly by remember { mutableStateOf(false) }
     var showFlyDialog by remember { mutableStateOf(false) }
     var showFlyToLatLon by remember { mutableStateOf(false) }
+    // Held still from the moment the box is tapped. The aircraft's own reading
+    // keeps arriving, and a code that followed it would be pointing somewhere
+    // else by the time anyone had it on a phone.
+    var qrTarget by remember { mutableStateOf<Pair<Double, Double>?>(null) }
     var showSettings by remember { mutableStateOf(false) }
     var showFind by remember { mutableStateOf(false) }
     var showVideo by remember { mutableStateOf(false) }
@@ -577,7 +581,13 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
                         EtaReadout(vehicle = vehicle)
-                        MapCoordinates(lat = vehicle.lat, lon = vehicle.lon)
+                        MapCoordinates(
+                            lat = vehicle.lat,
+                            lon = vehicle.lon,
+                            onTap = vehicle.lat?.let { la ->
+                                vehicle.lon?.let { lo -> { qrTarget = la to lo } }
+                            },
+                        )
                         MapCredit()
                     }
                     flyTarget?.takeIf { awaitingFly }?.let { target ->
@@ -718,6 +728,10 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
         )
     }
 
+    qrTarget?.let { (lat, lon) ->
+        CoordinateQrDialog(lat = lat, lon = lon, onDismiss = { qrTarget = null })
+    }
+
     if (showFlyToLatLon) {
         FlyToLatLonDialog(
             vehicle = vehicle,
@@ -747,13 +761,21 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
 }
 
 @Composable
-private fun MapCoordinates(lat: Double?, lon: Double?, modifier: Modifier = Modifier) {
+private fun MapCoordinates(
+    lat: Double?,
+    lon: Double?,
+    modifier: Modifier = Modifier,
+    onTap: (() -> Unit)? = null,
+) {
     Row(
         // Same ground and corner as the ETA and credit boxes it stacks with,
         // so the three read as one corner rather than three separate labels.
         modifier = modifier
             .clip(RoundedCornerShape(4.dp))
             .background(Color.Black.copy(alpha = 0.6f))
+            // Only once there is a position to go to. Tapping dashes would
+            // offer a walk to nowhere.
+            .then(if (onTap != null) Modifier.clickable { onTap() } else Modifier)
             .padding(horizontal = 10.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
