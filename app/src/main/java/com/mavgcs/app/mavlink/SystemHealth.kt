@@ -143,6 +143,30 @@ object SystemHealth {
         }
     }
 
+    /**
+     * Whether the autopilot says its own pre-arm checks currently pass.
+     *
+     * The answer is the autopilot's, not this app's. ArduPilot runs a long list
+     * of checks -- GPS, compass, EKF, battery, RC calibration, parameters --
+     * and reports the verdict as one health bit. Second-guessing it from the
+     * telemetry here would be a different and worse answer, and would disagree
+     * with what the vehicle does when the button is pressed.
+     *
+     * Only meaningful while disarmed. The bit is defined as always healthy once
+     * armed, so it stops being a question and starts being a formality; the
+     * caller is expected to have somewhere better to look by then.
+     *
+     * The present bit is checked first so that silence reads as "do not know"
+     * rather than "not ready". An autopilot that never reports the check at all
+     * leaves this false, which shows as the unchanged grey.
+     */
+    fun readyToArm(vehicle: VehicleState): Boolean {
+        val present = vehicle.sensorsPresent ?: return false
+        val health = vehicle.sensorsHealth ?: return false
+        val check = MavSysStatusSensor.MAV_SYS_STATUS_PREARM_CHECK
+        return check.isSetIn(present) && check.isSetIn(health)
+    }
+
     private fun tipFor(state: HealthState): String = when (state) {
         HealthState.ABSENT -> TIP_ABSENT
         HealthState.OFF -> TIP_OFF

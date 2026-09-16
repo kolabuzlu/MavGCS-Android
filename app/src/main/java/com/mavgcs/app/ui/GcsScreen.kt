@@ -75,6 +75,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -84,6 +85,10 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.imageResource
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -100,6 +105,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mavgcs.app.R
+import com.mavgcs.app.mavlink.SystemHealth
+import com.mavgcs.app.ui.theme.MavGreen
 import com.mavgcs.app.mavlink.FlightModes
 import com.mavgcs.app.mavlink.GcsCommand
 import com.mavgcs.app.mavlink.GuidedAction
@@ -350,6 +357,7 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                 ArmPad(
                     enabled = vehicle.heard,
                     armed = vehicle.armed,
+                    readyToArm = SystemHealth.readyToArm(vehicle),
                     metrics = metrics,
                     onCommand = viewModel::command,
                 )
@@ -1072,10 +1080,21 @@ private const val HOLD_MILLIS = 3000
 private fun ArmPad(
     enabled: Boolean,
     armed: Boolean,
+    readyToArm: Boolean,
     metrics: LayoutMetrics,
     onCommand: (GcsCommand) -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
+    // A third state for ARM, between the grey of a vehicle that will not go and
+    // the full green of one already armed: the autopilot's pre-arm checks pass
+    // and a press would be accepted. Deliberately far dimmer than armed, since
+    // the two must never be mistaken for each other at a glance -- this one
+    // says "it would work", the bright one says "the propellers are live".
+    //
+    // Mixed from the one green rather than picked separately. The palette has
+    // already been through a round of near-miss greens that read as a rendering
+    // fault, and a fourth would start it again.
+    val readyFill = MavGreen.copy(alpha = ReadyToArmTint).compositeOver(scheme.surfaceVariant)
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(metrics.controlGap)) {
         // Each button lights for the state the vehicle is actually in rather
         // than for the action it performs: green while armed, red while not, so
@@ -1083,8 +1102,15 @@ private fun ArmPad(
         HoldButton(
             label = "ARM",
             holdLabel = "FORCE\u2026",
+            // Only while it means something: the check is defined as always
+            // passing once armed, so the caption would be stating a formality.
+            labelPrefix = "READY TO".takeIf { !armed && readyToArm },
             enabled = enabled,
-            containerColor = if (armed) scheme.primary else scheme.surfaceVariant,
+            containerColor = when {
+                armed -> scheme.primary
+                readyToArm -> readyFill
+                else -> scheme.surfaceVariant
+            },
             contentColor = if (armed) scheme.onPrimary else scheme.onSurface,
             border = if (armed) null else BorderStroke(1.dp, scheme.outline),
             height = metrics.armHeight,
@@ -1135,6 +1161,13 @@ private fun ArmPad(
 private fun HoldButton(
     label: String,
     holdLabel: String,
+    /**
+     * A quieter word or two before [label], or null for none.
+     *
+     * Drawn at the same size and weight as the label, in lighter ink, so the
+     * button still reads as the thing it does rather than as a new control.
+     */
+    labelPrefix: String? = null,
     enabled: Boolean,
     containerColor: Color,
     contentColor: Color,
@@ -1195,7 +1228,21 @@ private fun HoldButton(
                 )
             }
             Text(
-                text = if (holding) holdLabel else label,
+                text = when {
+                    holding -> AnnotatedString(holdLabel)
+                    labelPrefix == null -> AnnotatedString(label)
+                    else -> buildAnnotatedString {
+                        // Same size and weight as the label it leads. Only the
+                        // ink is lighter, so the two words read as one line at
+                        // one size with the emphasis on the second half.
+                        withStyle(
+                            SpanStyle(color = contentColor.copy(alpha = LabelPrefixAlpha)),
+                        ) {
+                            append("$labelPrefix ")
+                        }
+                        append(label)
+                    }
+                },
                 modifier = Modifier
                     .align(Alignment.Center)
                     .padding(horizontal = 4.dp),
@@ -1203,6 +1250,7 @@ private fun HoldButton(
                 fontWeight = FontWeight.SemiBold,
                 textAlign = TextAlign.Center,
                 lineHeight = fontSize * 1.1f,
+                maxLines = 1,
             )
         }
     }
@@ -2184,6 +2232,17 @@ private val NavTargetColor = Color(0xFFFF2FD0)
  * rather than a warning that something is wrong. Dark text on it: white on a
  * colour this bright is barely there.
  */
+/**
+ * How much of the one green goes into the ready-to-arm fill.
+ *
+ * Low on purpose. It has to be unmistakable beside the grey of a vehicle that
+ * will not arm, and unmistakably *not* the solid green of one that already has.
+ */
+private const val ReadyToArmTint = 0.22f
+
+/** How far the caption before a button's label is faded. Size is unchanged. */
+private const val LabelPrefixAlpha = 0.6f
+
 private val ModePending = Color(0xFFD8B400)
 private val OnModePending = Color(0xFF2A2200)
 
