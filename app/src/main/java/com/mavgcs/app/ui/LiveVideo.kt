@@ -312,41 +312,47 @@ class LiveVideo {
                     f.fourcc, f.width, f.height, f.fps, f.bytesPerSecond / 1e6,
                 )
             }
-            // Every format the card offers, not just the first. They are all
-            // the same size here, but a card that refuses one and serves
-            // another is a thing that happens, and ruling it out is cheap.
-            var streamed = false
+            // Each format at the rate it advertises, and again at 30 -- the
+            // rate actually wanted. A card lists discrete intervals but the
+            // negotiation lets the host propose another, and many will honour
+            // one they never advertised. Halving the rate halves what the
+            // cable has to carry, which is the whole question here.
+            var best = 0.0
             for (want in formats) {
-                val agreed = opened.negotiate(want)
-                if (agreed == null) {
-                    lines += "Format %d: the card would not agree it.".format(want.formatIndex)
-                    continue
-                }
-                val buffer = ByteArray(agreed.maxFrameBytes.coerceAtLeast(1 shl 20))
-                val began = System.currentTimeMillis()
-                var bytes = 0L
-                var frames = 0
-                while (System.currentTimeMillis() - began < MEASURE_MS) {
-                    val got = opened.readFrame(buffer, 800)
-                    if (got > 0) {
-                        bytes += got
-                        if (got >= agreed.maxFrameBytes) frames++
+                for (target in listOf(0, 30)) {
+                    val asked = if (target == 0) want else want.copy(
+                        frameIntervalNs = 10_000_000L / target,
+                    )
+                    val agreed = opened.negotiate(asked)
+                    if (agreed == null) {
+                        lines += "%s: the card would not agree it.".format(want.fourcc)
+                        continue
                     }
+                    val buffer = ByteArray(agreed.maxFrameBytes.coerceAtLeast(1 shl 20))
+                    val began = System.currentTimeMillis()
+                    var bytes = 0L
+                    var frames = 0
+                    while (System.currentTimeMillis() - began < MEASURE_MS) {
+                        val got = opened.readFrame(buffer, 900)
+                        if (got > 0) {
+                            bytes += got
+                            if (got >= agreed.maxFrameBytes) frames++
+                        }
+                    }
+                    val seconds = (System.currentTimeMillis() - began) / 1000.0
+                    val rate = bytes / seconds / 1e6
+                    if (rate > best) best = rate
+                    lines += "%s at %.0f fps: %.1f MB/s, %d whole frames (%.1f fps of picture)"
+                        .format(
+                            agreed.fourcc, agreed.fps, rate, frames,
+                            rate * 1e6 / agreed.maxFrameBytes.coerceAtLeast(1),
+                        )
                 }
-                val seconds = (System.currentTimeMillis() - began) / 1000.0
-                lines += "Format %d (%s %dx%d): %.1f MB/s, %d whole frames.".format(
-                    agreed.formatIndex, agreed.fourcc, agreed.width, agreed.height,
-                    bytes / seconds / 1e6, frames,
-                )
-                if (bytes > 0) streamed = true
             }
-            lines += if (streamed) {
-                "Something is arriving. The link is the only question left."
-            } else {
-                "Not one byte from any format. Bulk transfers are not bandwidth " +
-                    "reserved, so a merely slow cable would still deliver something. " +
-                    "Nothing at all points at the card refusing this USB 2 link, or " +
-                    "at no signal reaching its input."
+            lines += when {
+                best <= 0.1 -> "Nothing is arriving at all."
+                else -> "Best %.1f MB/s. A 1080p frame is about 3.1 MB, so that is %.1f fps."
+                    .format(best, best * 1e6 / 3_110_400)
             }
         } finally {
             opened.close()

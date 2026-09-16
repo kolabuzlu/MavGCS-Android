@@ -302,5 +302,13 @@ private const val FRAME_UNCOMPRESSED = 0x05
 private const val FORMAT_MJPEG = 0x06
 private const val FRAME_MJPEG = 0x07
 
-/** How many maximum-size packets to ask for in one bulk read. */
+/**
+ * How many maximum-size packets to ask for in one bulk read.
+ *
+ * 64, which is 32KB, because measuring said so. The obvious reasoning -- that
+ * each call into the USB stack costs the same whatever it carries, so ask for
+ * more -- is wrong here: raising it to a megabyte per read cut the measured
+ * rate from 7.9 MB/s to 5.3. Android's bulk transfer does not reward large
+ * buffers, it punishes them.
+ */
 private const val PACKETS_PER_READ = 64
