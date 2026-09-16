@@ -1461,8 +1461,12 @@ internal fun <T> SegmentedChoice(
     options: List<Pair<T, String>>,
     selected: T,
     onSelect: (T) -> Unit,
+    accent: Color? = null,
+    onAccent: Color? = null,
 ) {
     val scheme = MaterialTheme.colorScheme
+    val fill = accent ?: scheme.primary
+    val ink = onAccent ?: scheme.onPrimary
     val shape = RoundedCornerShape(8.dp)
     Row(
         modifier = Modifier
@@ -1484,7 +1488,7 @@ internal fun <T> SegmentedChoice(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
                     .fillMaxHeight()
-                    .background(if (chosen) scheme.primary else Color.Transparent)
+                    .background(if (chosen) fill else Color.Transparent)
                     .clickable { onSelect(value) }
                     .padding(horizontal = 10.dp),
             ) {
@@ -1492,7 +1496,7 @@ internal fun <T> SegmentedChoice(
                     text = label,
                     fontSize = 12.sp,
                     fontWeight = if (chosen) FontWeight.Medium else FontWeight.Normal,
-                    color = if (chosen) scheme.onPrimary else scheme.onSurfaceVariant,
+                    color = if (chosen) ink else scheme.onSurfaceVariant,
                 )
             }
         }
@@ -1545,6 +1549,13 @@ private fun ConnectionPanel(
                         ),
                         selected = form.udpMode,
                         onSelect = onUdpMode,
+                        // The transport above it is settled; this is the part
+                        // still being chosen, and the same yellow the battery
+                        // selector uses marks it as such. Black on it for the
+                        // same reason the battery selector uses black: this
+                        // yellow is too light to read white off.
+                        accent = HudYellow,
+                        onAccent = Color.Black,
                     )
                 }
             }
@@ -1555,11 +1566,16 @@ private fun ConnectionPanel(
             ) {
                 // Find, beside Settings and built the same way so the pair
                 // reads as one set of panel controls rather than two separate
-                // things.
+                // things. Only the letter is coloured, in the map's go-there
+                // blue: it is the one of the two that reaches out onto the
+                // network rather than opening a panel.
                 OutlinedButton(
                     onClick = onFind,
                     modifier = Modifier.size(SegmentedHeight),
                     contentPadding = PaddingValues(0.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = FlyToBlue,
+                    ),
                 ) {
                     Text("F", fontSize = 14.sp, fontWeight = FontWeight.Medium)
                 }

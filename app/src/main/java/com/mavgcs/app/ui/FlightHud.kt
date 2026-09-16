@@ -56,7 +56,8 @@ import java.util.Locale
 
 private val SkyColor = Color(0xFF3A6EA5)
 private val GroundColor = Color(0xFF8B5A2B)
-private val HudYellow = Color(0xFFFFD54F)
+/** Shared with the connection panel, so the two cannot drift apart. */
+internal val HudYellow = Color(0xFFFFD54F)
 private val TapeBackground = Color(0xCC141414)
 private val HudTextColor = Color(0xFFE6E6E6)
 
