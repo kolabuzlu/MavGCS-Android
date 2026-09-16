@@ -1,6 +1,14 @@
 package com.mavgcs.app.ui
 
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.OptIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -46,6 +54,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -54,6 +63,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.rtsp.RtspMediaSource
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import com.mavgcs.app.video.UvcDevice
 import kotlin.math.roundToInt
 
 /**
@@ -96,14 +106,21 @@ class LiveVideo {
     var player by mutableStateOf<ExoPlayer?>(null)
         private set
 
+    /** What the capture card said about itself, line by line. */
+    var deviceReport by mutableStateOf<List<String>>(emptyList())
+        private set
+
+    /** Set when the camera permission is what is standing in the way. */
+    var needsCameraPermission by mutableStateOf(false)
+        private set
+
     val running: Boolean get() = player != null
 
     @OptIn(UnstableApi::class)
     fun start(context: Context) {
         stop()
         if (source == VideoSource.DEVICE) {
-            message = "This tablet does not offer the capture device to apps. " +
-                "Use RTSP for now."
+            openCapture(context)
             return
         }
         val uri = address.trim()
@@ -137,6 +154,127 @@ class LiveVideo {
         player = created
     }
 
+    /**
+     * Find the capture card, ask for it, and see what it will give us.
+     *
+     * Permission is the user's to grant and arrives on a broadcast, so the work
+     * continues there rather than returning an answer here.
+     */
+    fun openCapture(context: Context) {
+        // Android will not grant USB access to a video-class device to an app
+        // without camera permission, and refuses before showing any prompt.
+        if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.CAMERA)
+            != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            needsCameraPermission = true
+            message = "Android treats a capture card as a camera, so it needs " +
+                "camera permission before it will hand this one over."
+            return
+        }
+        needsCameraPermission = false
+        val manager = context.getSystemService(Context.USB_SERVICE) as UsbManager
+        val found = UvcDevice.attached(manager)
+        if (found.isEmpty()) {
+            message = "No capture device is plugged in."
+            deviceReport = emptyList()
+            return
+        }
+        val device = found.first()
+        if (manager.hasPermission(device)) {
+            inspect(manager, device)
+            return
+        }
+        message = "Waiting for permission to use ${device.productName ?: "the capture device"}"
+        val action = "com.mavgcs.app.USB_PERMISSION"
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context, intent: Intent) {
+                runCatching { ctx.unregisterReceiver(this) }
+                if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
+                    inspect(manager, device)
+                } else {
+                    message = "Permission for the capture device was refused."
+                }
+            }
+        }
+        ContextCompat.registerReceiver(
+            context, receiver, IntentFilter(action), ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        val pending = PendingIntent.getBroadcast(
+            context, 0, Intent(action).setPackage(context.packageName),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
+        )
+        manager.requestPermission(device, pending)
+    }
+
+    /**
+     * Open the card and write down what it offers.
+     *
+     * Reported rather than acted on for now: what a capture card advertises
+     * depends on what is plugged into its input and on how fast the cable it
+     * arrived through is, and both have to be right before a picture is
+     * possible. Saying which one is wrong is more use than failing silently.
+     */
+    private fun inspect(manager: UsbManager, device: UsbDevice) {
+        val opened = UvcDevice.open(manager, device)
+        if (opened == null) {
+            message = "Could not claim the capture device."
+            return
+        }
+        val lines = mutableListOf<String>()
+        try {
+            lines += opened.name
+            val formats = opened.formats()
+            if (formats.isEmpty()) {
+                lines += "It is advertising no video formats, which usually means " +
+                    "nothing is plugged into its input."
+            }
+            formats.forEach { f ->
+                lines += "%s %dx%d at %.0f fps — %.0f MB/s".format(
+                    f.fourcc, f.width, f.height, f.fps, f.bytesPerSecond / 1e6,
+                )
+            }
+            val agreed = formats.firstOrNull()?.let { opened.negotiate(it) }
+            if (agreed == null) {
+                lines += "The card would not agree a format."
+            } else {
+                lines += "The card agreed to %dx%d at %.0f fps.".format(
+                    agreed.width, agreed.height, agreed.fps,
+                )
+                // Read for a moment and weigh it. What a card offers and what
+                // the cable it arrived through can carry are different numbers,
+                // and only the second one decides whether there is a picture.
+                val buffer = ByteArray(agreed.maxFrameBytes.coerceAtLeast(1 shl 20))
+                val began = System.currentTimeMillis()
+                var bytes = 0L
+                var frames = 0
+                while (System.currentTimeMillis() - began < MEASURE_MS) {
+                    val got = opened.readFrame(buffer, 1_000)
+                    if (got > 0) {
+                        bytes += got
+                        if (got >= agreed.maxFrameBytes) frames++
+                    }
+                }
+                val seconds = (System.currentTimeMillis() - began) / 1000.0
+                val rate = bytes / seconds / 1e6
+                lines += "Measured %.0f MB/s over this cable, %d whole frames in %.0fs."
+                    .format(rate, frames, seconds)
+                val needed = agreed.bytesPerSecond / 1e6
+                lines += if (rate < needed * 0.9) {
+                    "That is %.0f MB/s short of the %.0f MB/s this format needs. "
+                        .format(needed - rate, needed) +
+                        "The card is on the tablet's USB 2 bus; its USB 3 bus is empty, " +
+                        "so this is the cable rather than the port."
+                } else {
+                    "Enough for the format it agreed to."
+                }
+            }
+        } finally {
+            opened.close()
+        }
+        deviceReport = lines
+        message = null
+    }
+
     fun stop() {
         player?.release()
         player = null
@@ -167,6 +305,9 @@ class LiveVideo {
     private companion object {
         /** Long enough for a camera that negotiates slowly, short of a hang. */
         const val RTSP_TIMEOUT_MS = 8_000L
+
+        /** How long to read the capture card for, when weighing the cable. */
+        const val MEASURE_MS = 3_000L
     }
 }
 
@@ -197,6 +338,11 @@ private fun VideoSurface(player: ExoPlayer, modifier: Modifier = Modifier) {
 fun VideoDialog(video: LiveVideo, onDismiss: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
     val context = androidx.compose.ui.platform.LocalContext.current
+    // Asked for here because a permission prompt needs an activity to belong
+    // to, and carried straight through to the capture attempt that wanted it.
+    val askCamera = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted -> if (granted) video.openCapture(context) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Live video", fontSize = 16.sp, fontWeight = FontWeight.SemiBold) },
@@ -216,14 +362,19 @@ fun VideoDialog(video: LiveVideo, onDismiss: () -> Unit) {
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    VideoSource.DEVICE -> Text(
-                        text = "A USB capture card is not offered to apps by this tablet: " +
-                            "Android only republishes one as a camera where the device " +
-                            "supports external cameras, and this one does not. Reaching it " +
-                            "directly over USB is possible but is its own piece of work.",
-                        fontSize = 12.sp,
-                        color = scheme.onSurfaceVariant,
-                    )
+                    VideoSource.DEVICE -> Column(
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(
+                            text = "Press Start to ask the tablet for the capture card and " +
+                                "read what it is offering.",
+                            fontSize = 12.sp,
+                            color = scheme.onSurfaceVariant,
+                        )
+                        video.deviceReport.forEach { line ->
+                            Text(line, fontSize = 12.sp, color = scheme.onSurface)
+                        }
+                    }
                 }
                 video.message?.let { note ->
                     Text(note, fontSize = 11.sp, color = scheme.onSurfaceVariant)
@@ -253,9 +404,21 @@ fun VideoDialog(video: LiveVideo, onDismiss: () -> Unit) {
                     }
                 }
                 TextButton(onClick = {
-                    if (video.running) video.stop() else video.start(context)
+                    when {
+                        video.running -> video.stop()
+                        video.needsCameraPermission ->
+                            askCamera.launch(android.Manifest.permission.CAMERA)
+                        else -> video.start(context)
+                    }
                 }) {
-                    Text(if (video.running) "Stop" else "Start", fontSize = 13.sp)
+                    Text(
+                        text = when {
+                            video.running -> "Stop"
+                            video.needsCameraPermission -> "Allow camera"
+                            else -> "Start"
+                        },
+                        fontSize = 13.sp,
+                    )
                 }
                 TextButton(onClick = onDismiss) { Text("Close", fontSize = 13.sp) }
             }

@@ -3,6 +3,24 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!--
+      For the USB capture card, not for the tablet's own cameras, which this app
+      never opens. Android treats a video-class device as a camera and refuses
+      to hand one over without this: the request comes back denied with
+      "Camera permission required for USB video class devices" before any
+      prompt is even shown.
+    -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!--
+      Declared not required so the app still installs on a tablet with no camera
+      of its own. Asking for the permission would otherwise imply the hardware.
+    -->
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.usb.host"
+        android:required="false" />
 
     <supports-screens
         android:largeScreens="true"
