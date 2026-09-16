@@ -394,6 +394,11 @@ class MavlinkClient {
         if (result == MavResult.MAV_RESULT_ACCEPTED || result == MavResult.MAV_RESULT_IN_PROGRESS) {
             return
         }
+        // The pilot asked for none of these -- the app sends them itself on
+        // every connection to set up the stream. A refused one is worth a log
+        // line and nothing more: narrating it would put a row of identical
+        // complaints where the aircraft's own PreArm messages should be.
+        if (command in HOUSEKEEPING) return
         val what = command?.name?.removePrefix("MAV_CMD_")?.replace('_', ' ')?.lowercase()
             ?: "the command"
         val why = when (result) {
@@ -611,6 +616,84 @@ class MavlinkClient {
         }
     }
 
+    /**
+     * The truncated form of one MAVLink 2 frame, or null to send it unchanged.
+     */
+    private fun trimPayload(b: ByteArray, off: Int, len: Int): ByteArray? {
+        if (len < V2_HEADER + 2) return null
+        if (b[off].toInt() and 0xFF != V2_MAGIC) return null
+        // Signed frames carry 13 more bytes and a signature over the contents.
+        if (b[off + 1 + 1].toInt() and 0x01 != 0) return null
+        val payload = b[off + 1].toInt() and 0xFF
+        // Exactly one whole frame, or leave it alone.
+        if (len != V2_HEADER + payload + 2) return null
+        var kept = payload
+        while (kept > 1 && b[off + V2_HEADER + kept - 1].toInt() == 0) kept--
+        if (kept == payload) return null
+
+        // The seed the sender mixed in after the frame, read back off the
+        // checksum it produced.
+        var full = CRC_INIT
+        for (i in 1 until V2_HEADER + payload) full = crcAccumulate(b[off + i].toInt(), full)
+        val was = (b[off + V2_HEADER + payload].toInt() and 0xFF) or
+            ((b[off + V2_HEADER + payload + 1].toInt() and 0xFF) shl 8)
+        val seed = (0..255).firstOrNull { crcAccumulate(it, full) == was } ?: return null
+
+        val out = ByteArray(V2_HEADER + kept + 2)
+        System.arraycopy(b, off, out, 0, V2_HEADER + kept)
+        out[1] = kept.toByte()
+        var crc = CRC_INIT
+        for (i in 1 until V2_HEADER + kept) crc = crcAccumulate(out[i].toInt(), crc)
+        crc = crcAccumulate(seed, crc)
+        out[V2_HEADER + kept] = (crc and 0xFF).toByte()
+        out[V2_HEADER + kept + 1] = ((crc shr 8) and 0xFF).toByte()
+        return out
+    }
+
+    /** One byte of CRC-16/MCRF4XX, the checksum MAVLink frames carry. */
+    private fun crcAccumulate(byte: Int, crc: Int): Int {
+        var tmp = (byte and 0xFF) xor (crc and 0xFF)
+        tmp = (tmp xor (tmp shl 4)) and 0xFF
+        return ((crc shr 8) xor (tmp shl 8) xor (tmp shl 3) xor (tmp shr 4)) and 0xFFFF
+    }
+
+    /**
+     * Drops the trailing zero bytes MAVLink 2 allows a sender to leave out.
+     *
+     * The format calls this optional and every autopilot accepts either form,
+     * so the library not doing it is not a bug. The radio is another matter.
+     * Over an ExpressLRS link the untruncated frame is simply gone: the same
+     * DO_SET_MODE, same target, same sysid, sent seconds apart down the same
+     * socket, was answered MAV_RESULT_ACCEPTED at 44 bytes and answered with
+     * nothing at 45. One trailing zero on the confirmation field was the whole
+     * difference, and it cost every command the app has ever sent over that
+     * radio -- mode changes, stream rates, the lot -- while telemetry poured
+     * back the other way and made the link look healthy.
+     *
+     * The frame carries no table of the CRC seeds each message type needs, so
+     * rather than ship one that has to track the dialect, recover the seed
+     * from the checksum already on the frame. The per-byte step is a bijection
+     * for a fixed running value, so exactly one of the 256 candidates can have
+     * produced it.
+     *
+     * Anything not a plain unsigned MAVLink 2 frame is passed through
+     * untouched: version 1 has no truncation, a signed frame must not be
+     * rewritten, and a buffer that is not exactly one whole frame is not ours
+     * to interpret.
+     */
+    private fun truncating(out: OutputStream): OutputStream = object : OutputStream() {
+        override fun write(b: Int) = out.write(b)
+
+        override fun flush() = out.flush()
+
+        override fun close() = out.close()
+
+        override fun write(b: ByteArray, off: Int, len: Int) {
+            val trimmed = runCatching { trimPayload(b, off, len) }.getOrNull()
+            if (trimmed == null) out.write(b, off, len) else out.write(trimmed, 0, trimmed.size)
+        }
+    }
+
     private fun startConnection(input: InputStream, output: OutputStream) {
         // [output] is expected to count its own transmitted bytes. TCP is
         // wrapped by the caller; UDP counts inside its own writer, because only
@@ -618,7 +701,7 @@ class MavlinkClient {
         // side is wrapped here instead, because both transports need the same
         // treatment and neither can do it further up: what arrives has to be
         // counted before the parser is free to throw any of it away.
-        val connection = MavlinkConnection.create(counting(input), output)
+        val connection = MavlinkConnection.create(counting(input), truncating(output))
         connectionRef.set(connection)
         val opened = System.currentTimeMillis()
         var silenceReported = false
@@ -1624,6 +1707,17 @@ class MavlinkClient {
          * given up on it.
          */
         private const val SILENT_LINK_MS = 10_000L
+
+        /** The requests the app makes for itself, not for the pilot. */
+        private val HOUSEKEEPING = setOf(
+            MavCmd.MAV_CMD_SET_MESSAGE_INTERVAL,
+            MavCmd.MAV_CMD_REQUEST_MESSAGE,
+        )
+
+        /** Magic, and the bytes before the payload, of a MAVLink 2 frame. */
+        private const val V2_MAGIC = 0xFD
+        private const val V2_HEADER = 10
+        private const val CRC_INIT = 0xFFFF
 
         private const val MODE_RETRY_EVERY_MS = 1000L
 
