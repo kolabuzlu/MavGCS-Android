@@ -31,6 +31,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -45,6 +47,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
 import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.AlertDialog
@@ -581,13 +584,25 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
                         EtaReadout(vehicle = vehicle)
-                        MapCoordinates(
-                            lat = vehicle.lat,
-                            lon = vehicle.lon,
-                            onTap = vehicle.lat?.let { la ->
-                                vehicle.lon?.let { lo -> { qrTarget = la to lo } }
-                            },
-                        )
+                        Row(
+                            // The row is only as tall as the readout in it, and
+                            // the button then fills that height and squares
+                            // itself off against it. Sized by hand instead, the
+                            // two drift apart the moment the readout's text or
+                            // padding changes.
+                            modifier = Modifier.height(IntrinsicSize.Min),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            MapCoordinates(lat = vehicle.lat, lon = vehicle.lon)
+                            MapQrButton(
+                                onClick = vehicle.lat?.let { la ->
+                                    vehicle.lon?.let { lo -> { qrTarget = la to lo } }
+                                },
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .aspectRatio(1f),
+                            )
+                        }
                         MapCredit()
                     }
                     flyTarget?.takeIf { awaitingFly }?.let { target ->
@@ -760,22 +775,46 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
     }
 }
 
+/**
+ * Turns the coordinates beside it into a code a phone can scan.
+ *
+ * Its own button rather than the readout being tappable: a box of figures
+ * gives nothing away about being pressable, and a control that has to be
+ * discovered by trying it is no control at all.
+ *
+ * Dimmed rather than hidden when there is no fix, for the reason the ETA box
+ * shows a dash instead of disappearing -- a control that comes and goes looks
+ * like a fault, and its absence says nothing about why.
+ */
 @Composable
-private fun MapCoordinates(
-    lat: Double?,
-    lon: Double?,
-    modifier: Modifier = Modifier,
-    onTap: (() -> Unit)? = null,
-) {
+private fun MapQrButton(onClick: (() -> Unit)?, modifier: Modifier = Modifier) {
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(Color.Black.copy(alpha = 0.6f))
+            .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier),
+    ) {
+        Icon(
+            imageVector = Icons.Filled.QrCode2,
+            contentDescription = "Show these coordinates as a QR code",
+            tint = MaterialTheme.colorScheme.onSurface
+                .copy(alpha = if (onClick != null) 1f else 0.35f),
+            // A share of the square rather than a fixed size, so the glyph
+            // keeps its margin whatever height the readout ends up being.
+            modifier = Modifier.fillMaxSize(0.72f),
+        )
+    }
+}
+
+@Composable
+private fun MapCoordinates(lat: Double?, lon: Double?, modifier: Modifier = Modifier) {
     Row(
         // Same ground and corner as the ETA and credit boxes it stacks with,
         // so the three read as one corner rather than three separate labels.
         modifier = modifier
             .clip(RoundedCornerShape(4.dp))
             .background(Color.Black.copy(alpha = 0.6f))
-            // Only once there is a position to go to. Tapping dashes would
-            // offer a walk to nowhere.
-            .then(if (onTap != null) Modifier.clickable { onTap() } else Modifier)
             .padding(horizontal = 10.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
