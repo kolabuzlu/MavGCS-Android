@@ -285,12 +285,112 @@ class LiveVideo {
      * possible. Saying which one is wrong is more use than failing silently.
      */
     private fun inspect(manager: UsbManager, device: UsbDevice) {
-        message = "Reading from the capture card. This takes a few seconds."
+        message = "Opening the capture card"
         deviceReport = emptyList()
-        work.launch {
-            val lines = withContext(Dispatchers.IO) { gather(manager, device) }
-            deviceReport = lines
-            message = null
+        streaming = true
+        mjpeg = work.launch {
+            try {
+                withContext(Dispatchers.IO) { capture(manager, device) }
+            } finally {
+                streaming = false
+                frame = null
+            }
+        }
+    }
+
+    /**
+     * Read the capture card and show whatever it gives us.
+     *
+     * Frame rate is not the point and is not chased: the card insists on 60 a
+     * second and the cable will carry a couple, so most of what it sends is
+     * dropped on the floor by the link and the ones that arrive whole are the
+     * picture. Each is drawn as it lands.
+     */
+    private suspend fun capture(manager: UsbManager, device: UsbDevice) {
+        val opened = UvcDevice.open(manager, device)
+        if (opened == null) {
+            withContext(Dispatchers.Main) { message = "Could not claim the capture card." }
+            return
+        }
+        try {
+            val formats = opened.formats()
+            // NV12 first: turning it into something drawable is a byte swap,
+            // where the packed and planar layouts both need gathering.
+            val wanted = formats.firstOrNull { it.fourcc.equals("NV12", true) }
+                ?: formats.firstOrNull()
+            if (wanted == null) {
+                withContext(Dispatchers.Main) {
+                    message = "The card is advertising no video formats, which " +
+                        "usually means nothing is plugged into its input."
+                }
+                return
+            }
+            val agreed = opened.negotiate(wanted)
+            if (agreed == null) {
+                withContext(Dispatchers.Main) { message = "The card would not agree a format." }
+                return
+            }
+            withContext(Dispatchers.Main) {
+                deviceReport = listOf(
+                    opened.name,
+                    "%s %dx%d".format(agreed.fourcc, agreed.width, agreed.height),
+                )
+                message = "Waiting for a frame"
+            }
+            val buffer = ByteArray(agreed.maxFrameBytes.coerceAtLeast(1 shl 20))
+            val luma = agreed.width * agreed.height
+            var shown = 0
+            var biggest = 0
+            var began = System.currentTimeMillis()
+            while (currentCoroutineContext().isActive) {
+                val got = opened.readFrame(buffer, FRAME_WAIT_MS)
+                if (got > biggest) biggest = got
+                // The whole picture is not insisted on. A frame that arrives
+                // with its colour cut short still shows what the camera sees,
+                // and one picture is worth more here than a perfect one that
+                // never comes.
+                if (got < luma) {
+                    // Nothing is assembling. Say what the stream looks like
+                    // instead of waiting silently on it.
+                    val shape = opened.describeStream(2_000)
+                    withContext(Dispatchers.Main) {
+                        message = "No frame yet. Largest %.1f MB of %.1f MB."
+                            .format(biggest / 1e6, agreed.maxFrameBytes / 1e6)
+                        deviceReport = listOf(
+                            opened.name,
+                            "%s %dx%d".format(agreed.fourcc, agreed.width, agreed.height),
+                            "%d reads, %.1f MB in 2s, %d short".format(
+                                shape.reads, shape.bytes / 1e6, shape.shortReads,
+                            ),
+                            "%d looked like headers, %d said end-of-frame".format(
+                                shape.validHeaders, shape.endOfFrames,
+                            ),
+                            "read sizes: " + shape.sizes.joinToString(", "),
+                        )
+                    }
+                    continue
+                }
+                val bitmap = opened.toBitmap(buffer, got, agreed) ?: continue
+                shown++
+                val seconds = (System.currentTimeMillis() - began) / 1000.0
+                val rate = if (seconds > 0) shown / seconds else 0.0
+                withContext(Dispatchers.Main) {
+                    frame = bitmap
+                    message = null
+                    deviceReport = listOf(
+                        opened.name,
+                        "%s %dx%d — %d frames, %.1f a second".format(
+                            agreed.fourcc, agreed.width, agreed.height, shown, rate,
+                        ),
+                    )
+                }
+                if (shown == 1) {
+                    began = System.currentTimeMillis()
+                    shown = 0
+                }
+            }
+        } finally {
+            opened.close()
         }
     }
 
@@ -481,6 +581,14 @@ class LiveVideo {
 
         /** How long to read the capture card for, when weighing the cable. */
         const val MEASURE_MS = 3_000L
+
+        /**
+         * How long to wait for one whole frame off the card.
+         *
+         * Generous. The link delivers a couple of frames a second at best, and
+         * a frame that takes a moment is worth far more than a timeout.
+         */
+        const val FRAME_WAIT_MS = 4_000
 
         /** How long to wait on an HTTP video stream before giving up. */
         const val HTTP_TIMEOUT_MS = 8_000

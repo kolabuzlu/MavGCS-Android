@@ -69,6 +69,18 @@ class UvcDevice(
 
         private const val CONTROL_TIMEOUT_MS = 2_000
 
+        /** Per bulk read. Short, so a stalled stream is noticed rather than hung on. */
+        private const val READ_TIMEOUT_MS = 300
+
+        /**
+         * How long one payload is, header included.
+         *
+         * Read off a raw capture rather than assumed: headers landed at 0,
+         * 1024, 2048 and so on. A device that chose another size would need
+         * this learned from the gap between the first two headers instead.
+         */
+        private const val PAYLOAD_BYTES = 1024
+
         /** True when this device has a video-class streaming interface. */
         fun isCapture(device: UsbDevice): Boolean =
             (0 until device.interfaceCount).any { index ->
@@ -192,49 +204,194 @@ class UvcDevice(
     }
 
     /**
-     * Read one whole video frame, or null if none arrived in time.
+     * Read one whole video frame, or -1 if none arrived in time.
      *
-     * Bulk payloads each begin with a short header saying whether this is the
-     * end of a frame, and carrying a bit that flips between consecutive frames.
-     * Either can mark the boundary; both are watched, because cards disagree
-     * about which they bother to set.
+     * The stream is a continuous run of small payloads, each a 12-byte header
+     * followed by its data, packed end to end with nothing between them. On
+     * this card a payload is 1024 bytes, so a 32KB read carries thirty-two of
+     * them. That is worth stating because two plausible readings of the
+     * specification are both wrong here and both produce a picture that almost
+     * works: a header on every read gives evenly spaced stripes, and a header
+     * once per frame gives stripes that lean. The bytes settled it -- headers
+     * sit at 0, 1024, 2048 and so on, whatever the read boundaries are doing.
+     *
+     * The frame boundary is the frame-ID bit flipping in the header, not the
+     * end-of-frame flag, because this card never sets that flag: a raw capture
+     * showed 193 reads carrying six megabytes with it set exactly zero times.
+     *
+     * Payload boundaries survive a lost byte by scanning forward for the next
+     * header rather than assuming the stride held, since a frame ends on a
+     * short payload that knocks the rhythm out of step.
      */
     fun readFrame(into: ByteArray, timeoutMs: Int): Int {
+        val packet = ByteArray(endpoint.maxPacketSize * PACKETS_PER_READ)
+        val deadline = System.currentTimeMillis() + timeoutMs
         var filled = 0
         var started = false
         var frameId = -1
-        val packet = ByteArray(endpoint.maxPacketSize * PACKETS_PER_READ)
-        val deadline = System.currentTimeMillis() + timeoutMs
+        var remaining = 0          // data left in the payload being read
         while (System.currentTimeMillis() < deadline) {
-            val read = connection.bulkTransfer(endpoint, packet, packet.size, timeoutMs)
+            val read = connection.bulkTransfer(endpoint, packet, packet.size, READ_TIMEOUT_MS)
             if (read <= 0) continue
-            val headerLength = packet[0].toInt() and 0xFF
-            if (headerLength < 2 || headerLength > read) continue
-            val info = packet[1].toInt() and 0xFF
-            val id = info and 0x01
-            val endOfFrame = (info and 0x02) != 0
-            val error = (info and 0x40) != 0
-            if (error) {
-                filled = 0
-                started = false
-                continue
+            var at = 0
+            while (at < read) {
+                if (remaining > 0) {
+                    val take = minOf(remaining, read - at)
+                    if (started && filled + take <= into.size) {
+                        System.arraycopy(packet, at, into, filled, take)
+                        filled += take
+                    }
+                    at += take
+                    remaining -= take
+                    continue
+                }
+                // A payload header, or hunt for one.
+                if (at + 2 > read) break
+                val headerLength = packet[at].toInt() and 0xFF
+                val info = packet[at + 1].toInt() and 0xFF
+                if (headerLength !in 2..64 || (info and 0x80) == 0) {
+                    at += 1
+                    continue
+                }
+                val id = info and 0x01
+                if (!started) {
+                    // Begin at a boundary, so the frame handed back is whole
+                    // rather than starting halfway down the picture.
+                    frameId = id
+                    started = true
+                    filled = 0
+                } else if (id != frameId) {
+                    return filled
+                }
+                if ((info and 0x40) != 0) filled = 0       // the card flagged an error
+                at += headerLength
+                remaining = (PAYLOAD_BYTES - headerLength).coerceAtLeast(0)
             }
-            if (!started) {
-                frameId = id
-                started = true
-            } else if (id != frameId) {
-                // The card moved on without flagging the end. What is held is a
-                // complete frame; this payload belongs to the next one.
-                return filled
-            }
-            val payload = read - headerLength
-            if (payload > 0 && filled + payload <= into.size) {
-                System.arraycopy(packet, headerLength, into, filled, payload)
-                filled += payload
-            }
-            if (endOfFrame) return filled
         }
-        return if (filled > 0) filled else -1
+        return -1
+    }
+
+    /**
+     * One raw frame turned into something that can be drawn.
+     *
+     * Through the platform's own YUV encoder rather than a hand-written colour
+     * conversion: it is correct, it is fast, and two million pixels a frame is
+     * not somewhere to be inventing arithmetic. NV12 and NV21 differ only in
+     * which of the two chroma bytes comes first, so the swap is the whole of
+     * the work; the planar and packed layouts are gathered into that shape.
+     */
+    fun toBitmap(data: ByteArray, length: Int, format: Format): android.graphics.Bitmap? {
+        val width = format.width
+        val height = format.height
+        val luma = width * height
+        if (length < luma) return null
+        val nv21 = ByteArray(luma + luma / 2)
+        // Neutral chroma, so a frame that arrives short of its colour renders
+        // as grey rather than as the violent green that zeroes would give.
+        java.util.Arrays.fill(nv21, luma, nv21.size, 128.toByte())
+        when (format.fourcc.uppercase()) {
+            "NV12" -> {
+                System.arraycopy(data, 0, nv21, 0, luma)
+                var i = 0
+                while (luma + i + 1 < nv21.size && luma + i + 1 < length) {
+                    nv21[luma + i] = data[luma + i + 1]
+                    nv21[luma + i + 1] = data[luma + i]
+                    i += 2
+                }
+            }
+            "I420", "YU12" -> {
+                System.arraycopy(data, 0, nv21, 0, luma)
+                val quarter = luma / 4
+                for (i in 0 until quarter) {
+                    val u = luma + i
+                    val v = luma + quarter + i
+                    if (v < length) {
+                        nv21[luma + i * 2] = data[v]
+                        nv21[luma + i * 2 + 1] = data[u]
+                    }
+                }
+            }
+            "YUY2", "YUYV" -> {
+                for (y in 0 until height) {
+                    for (x in 0 until width step 2) {
+                        val at = (y * width + x) * 2
+                        if (at + 3 >= length) break
+                        nv21[y * width + x] = data[at]
+                        nv21[y * width + x + 1] = data[at + 2]
+                        if (y % 2 == 0) {
+                            val c = luma + (y / 2) * width + x
+                            if (c + 1 < nv21.size) {
+                                nv21[c] = data[at + 3]
+                                nv21[c + 1] = data[at + 1]
+                            }
+                        }
+                    }
+                }
+            }
+            else -> return null
+        }
+        return runCatching {
+            val out = java.io.ByteArrayOutputStream(luma / 4)
+            android.graphics.YuvImage(nv21, android.graphics.ImageFormat.NV21, width, height, null)
+                .compressToJpeg(android.graphics.Rect(0, 0, width, height), 80, out)
+            val bytes = out.toByteArray()
+            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        }.getOrNull()
+    }
+
+    /** What the stream actually looks like, for when it will not assemble. */
+    data class Shape(
+        val reads: Int,
+        val bytes: Long,
+        val shortReads: Int,
+        val validHeaders: Int,
+        val endOfFrames: Int,
+        val sizes: List<Int>,
+    )
+
+    /**
+     * Watch the raw stream for a moment and describe its shape.
+     *
+     * When frames will not assemble, the useful question is not "why" but
+     * "what is actually arriving" -- how big the reads are, whether any of
+     * them begin with something that looks like a header, and whether the
+     * end-of-frame flag is ever set. Three numbers settle it where guessing
+     * does not.
+     */
+    fun describeStream(millis: Int): Shape {
+        val packet = ByteArray(endpoint.maxPacketSize * PACKETS_PER_READ)
+        val deadline = System.currentTimeMillis() + millis
+        var reads = 0
+        var bytes = 0L
+        var shortReads = 0
+        var headers = 0
+        var eofs = 0
+        val sizes = mutableListOf<Int>()
+        var expectHeader = true
+        while (System.currentTimeMillis() < deadline) {
+            val read = connection.bulkTransfer(endpoint, packet, packet.size, READ_TIMEOUT_MS)
+            if (read < 0) { expectHeader = true; continue }
+            reads++
+            bytes += read
+            if (sizes.size < 12) sizes += read
+            if (expectHeader && read >= 2) {
+                val headerLength = packet[0].toInt() and 0xFF
+                val info = packet[1].toInt() and 0xFF
+                // A real header is a plausible length with the end-of-header
+                // bit set, which is the only cheap way to tell one from pixels.
+                if (headerLength in 2..64 && (info and 0x80) != 0) {
+                    headers++
+                    if ((info and 0x02) != 0) eofs++
+                }
+            }
+            if (read < packet.size) {
+                shortReads++
+                expectHeader = true
+            } else {
+                expectHeader = false
+            }
+        }
+        return Shape(reads, bytes, shortReads, headers, eofs, sizes)
     }
 
     fun close() {
