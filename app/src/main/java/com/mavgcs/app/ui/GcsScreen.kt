@@ -509,6 +509,7 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                         radarTiles = radarTiles,
                         adsbContacts = adsbContacts,
                         homeHeldAt = homeHeldAt,
+                        homeMoveArmed = movingHome,
                         onMapTap = { point ->
                             // While the move is armed the next tap means only
                             // this, and spends the arming whatever the answer
@@ -2865,6 +2866,7 @@ private fun VehicleMap(
     adsbContacts: List<AdsbContact>,
     onMapTap: (GeoPoint) -> Unit,
     homeHeldAt: GeoPoint?,
+    homeMoveArmed: Boolean,
 ) {
     val trail = remember { mutableListOf<GeoPoint>() }
     // Held outside snapshot state on purpose: comparing the token here must not
@@ -2936,6 +2938,16 @@ private fun VehicleMap(
             }
             // Rebuilt every update, so it has to happen whether or not there is a
             // fix, otherwise the target marker would never refresh without one.
+            // osmdroid's Marker swallows any tap that lands on it: through a
+            // click listener if it has one, and otherwise by opening a bubble
+            // and panning the map to fit it. While the move is armed that would
+            // leave the aircraft, the home badge and every waypoint as dead
+            // patches where a tap quietly did nothing, so each of them hands
+            // the tap back and it reaches the map underneath.
+            fun Marker.tapsToMapWhileMoving(normally: () -> Boolean) {
+                infoWindow = null
+                setOnMarkerClickListener { _, _ -> if (homeMoveArmed) false else normally() }
+            }
             map.overlays.removeAll { it !is MapEventsOverlay && it !is TilesOverlay }
             referenceOverlays.forEach { overlay ->
                 val shown = map.overlays.contains(overlay)
@@ -2958,6 +2970,7 @@ private fun VehicleMap(
                     icon = homeIcon
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                     title = "Home"
+                    tapsToMapWhileMoving { true }
                 }
             }
             val lat = vehicle.lat
@@ -3037,8 +3050,7 @@ private fun VehicleMap(
                         // No info window, and the tap is swallowed: osmdroid
                         // would otherwise pan the map to fit one, which reads
                         // as the map lurching when a contact is brushed.
-                        infoWindow = null
-                        setOnMarkerClickListener { _, _ -> true }
+                        tapsToMapWhileMoving { true }
                     }
                 }
                 map.overlays += Marker(map).apply {
@@ -3050,6 +3062,7 @@ private fun VehicleMap(
                     // Canvas.rotate, so a compass heading must be negated
                     // here to turn the icon the right way.
                     rotation = -(vehicle.headingDeg ?: vehicle.yawDeg ?: 0f)
+                    tapsToMapWhileMoving { true }
                 }
                 if (firstFix) {
                     map.controller.setZoom(DEFAULT_ZOOM)
@@ -3088,8 +3101,7 @@ private fun VehicleMap(
                     // itself, which is what made a waypoint tap throw the view
                     // around. The tap opens the altitude editor instead, and is
                     // consumed so it cannot also drop a new point.
-                    infoWindow = null
-                    setOnMarkerClickListener { _, _ ->
+                    tapsToMapWhileMoving {
                         currentWaypointTap(index)
                         true
                     }
@@ -3103,6 +3115,7 @@ private fun VehicleMap(
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                     flyTargetIcon?.let { icon = it }
                     title = "Fly to"
+                    tapsToMapWhileMoving { true }
                 }
             }
             map.invalidate()
