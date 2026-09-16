@@ -74,6 +74,14 @@ data class VehicleState(
     val homeLat: Double? = null,
     val homeLon: Double? = null,
     /**
+     * Home's height above the sea, in metres.
+     *
+     * Kept because every relative altitude the aircraft reports is measured
+     * from it. Moving home across the map has to carry this figure along
+     * unchanged, or the RTL height and the altitude readout move with it.
+     */
+    val homeAltM: Double? = null,
+    /**
      * The mission item the vehicle is currently flying to. Item 0 is the
      * home placeholder, so the pilot's first point is 1.
      */

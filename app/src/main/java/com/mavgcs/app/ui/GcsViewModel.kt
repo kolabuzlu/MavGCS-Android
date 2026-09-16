@@ -112,6 +112,10 @@ class GcsViewModel : ViewModel() {
         client.flyTo(lat, lon, altitudeM)
     }
 
+    fun setHome(lat: Double, lon: Double) {
+        client.setHome(lat, lon)
+    }
+
     fun command(command: GcsCommand) {
         client.send(command)
     }

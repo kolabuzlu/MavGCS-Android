@@ -394,6 +394,21 @@ class MavlinkClient {
         // accepted and then does not happen is a different fault from one that
         // never arrived, and only the log can tell them apart.
         Log.i(TAG, "ACK ${command?.name ?: "?"} -> ${result?.name ?: "?"}")
+        if (command == MavCmd.MAV_CMD_DO_SET_HOME && result == MavResult.MAV_RESULT_ACCEPTED) {
+            // ArduPilot does not volunteer HOME_POSITION when home changes, and
+            // the app only asks for it at first contact. Without this the
+            // marker sits at the old place until the next reconnection, which
+            // looks exactly like the move having failed.
+            val connection = connectionRef.get()
+            val addressed = target.get()
+            if (connection != null && addressed != null) {
+                tx.execute {
+                    runCatching {
+                        requestHomePosition(connection, addressed.first, addressed.second)
+                    }
+                }
+            }
+        }
         if (result == MavResult.MAV_RESULT_ACCEPTED || result == MavResult.MAV_RESULT_IN_PROGRESS) {
             return
         }
@@ -676,6 +691,47 @@ class MavlinkClient {
             connection.send2(GCS_SYSTEM_ID, GCS_COMPONENT_ID, payload)
             expect(MavCmd.MAV_CMD_DO_REPOSITION)
         }
+
+    /**
+     * Move the point RTL flies back to and relative altitudes are measured from.
+     *
+     * COMMAND_INT for the reason the reposition uses it: a float32 cannot hold
+     * a 1e7 scaled latitude without losing metres of it.
+     *
+     * The altitude sent is the one home already has, not a new one. The pilot
+     * has dragged a marker across a flat map and said nothing about height,
+     * and home's altitude is the datum every relative altitude on the aircraft
+     * is measured against -- inventing one here would move the RTL height and
+     * the altitude readout along with it.
+     */
+    fun setHome(lat: Double, lon: Double) {
+        val altitude = _state.value.homeAltM
+        if (altitude == null) {
+            note("The aircraft has not said where home is yet, so it cannot be moved.")
+            return
+        }
+        guided("home to %.6f, %.6f".format(Locale.ROOT, lat, lon)) { connection, sys, comp ->
+            val payload = CommandInt.builder()
+                .targetSystem(sys)
+                .targetComponent(comp)
+                .frame(MavFrame.MAV_FRAME_GLOBAL)
+                .command(MavCmd.MAV_CMD_DO_SET_HOME)
+                .current(0)
+                .autocontinue(0)
+                // Zero means the place named here, rather than wherever the
+                // aircraft happens to be standing.
+                .param1(0f)
+                .param2(0f)
+                .param3(0f)
+                .param4(Float.NaN)
+                .x((lat * 1e7).roundToInt())
+                .y((lon * 1e7).roundToInt())
+                .z(altitude.toFloat())
+                .build()
+            connection.send2(GCS_SYSTEM_ID, GCS_COMPONENT_ID, payload)
+            expect(MavCmd.MAV_CMD_DO_SET_HOME)
+        }
+    }
 
     private fun guided(description: String, block: (MavlinkConnection, Int, Int) -> Unit) {
         val connection = connectionRef.get() ?: return
@@ -1104,6 +1160,7 @@ class MavlinkClient {
                 it.copy(
                     homeLat = homeLat,
                     homeLon = homeLon,
+                    homeAltM = payload.altitude() / 1000.0,
                     distToHomeM = distanceMeters(it.lat, it.lon, homeLat, homeLon),
                 )
             }

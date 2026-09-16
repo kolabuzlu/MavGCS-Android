@@ -227,6 +227,13 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
     // keeps arriving, and a code that followed it would be pointing somewhere
     // else by the time anyone had it on a phone.
     var qrTarget by remember { mutableStateOf<Pair<Double, Double>?>(null) }
+    // Where home has been dragged to and not yet answered for. The marker sits
+    // here while the question is up, so the pilot can see the place they are
+    // being asked about.
+    var homeHeldAt by remember { mutableStateOf<GeoPoint?>(null) }
+    // Armed by the hold, spent by the next tap. One place, one question, then
+    // the map goes back to meaning what it usually means.
+    var movingHome by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var showFind by remember { mutableStateOf(false) }
     var showVideo by remember { mutableStateOf(false) }
@@ -501,8 +508,16 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                         onWaypointTap = { editingWaypoint = it },
                         radarTiles = radarTiles,
                         adsbContacts = adsbContacts,
+                        homeHeldAt = homeHeldAt,
                         onMapTap = { point ->
-                            if (queueWaypoints) {
+                            // While the move is armed the next tap means only
+                            // this, and spends the arming whatever the answer
+                            // turns out to be. It must not also drop a waypoint
+                            // or a fly-here pin on the way past.
+                            if (movingHome) {
+                                movingHome = false
+                                homeHeldAt = point
+                            } else if (queueWaypoints) {
                                 waypointQueue.add(QueuedWaypoint(point))
                             } else {
                                 flyTarget = point
@@ -603,7 +618,16 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                                     .aspectRatio(1f),
                             )
                         }
-                        MapCredit()
+                        MapCredit(
+                            onHold = { movingHome = true }
+                                .takeIf { vehicle.homeLat != null && vehicle.homeLon != null },
+                        )
+                    }
+                    if (movingHome) {
+                        MoveHomeBar(
+                            onCancel = { movingHome = false },
+                            modifier = Modifier.align(Alignment.BottomCenter),
+                        )
                     }
                     flyTarget?.takeIf { awaitingFly }?.let { target ->
                         FlyHereBar(
@@ -743,6 +767,17 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
         )
     }
 
+    homeHeldAt?.let { point ->
+        MoveHomeDialog(
+            target = point,
+            onDismiss = { homeHeldAt = null },
+            onConfirm = {
+                viewModel.setHome(point.latitude, point.longitude)
+                homeHeldAt = null
+            },
+        )
+    }
+
     qrTarget?.let { (lat, lon) ->
         CoordinateQrDialog(lat = lat, lon = lon, onDismiss = { qrTarget = null })
     }
@@ -786,6 +821,41 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
  * shows a dash instead of disappearing -- a control that comes and goes looks
  * like a fault, and its absence says nothing about why.
  */
+/**
+ * Asks before moving the place the aircraft comes back to.
+ *
+ * Spelled out rather than a bare yes or no: home is the datum for RTL and for
+ * every altitude reported above it, so moving it is not the small thing that
+ * dragging a marker across a map feels like.
+ */
+@Composable
+private fun MoveHomeDialog(target: GeoPoint, onDismiss: () -> Unit, onConfirm: () -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Move home?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "%.6f, %.6f".format(Locale.ROOT, target.latitude, target.longitude),
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 14.sp,
+                    color = scheme.onSurface,
+                )
+                Text(
+                    text = "RTL returns here, and altitudes above home are " +
+                        "measured from here. The height home already has is kept.",
+                    fontSize = 12.sp,
+                    color = scheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("Move home") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
 @Composable
 private fun MapQrButton(onClick: (() -> Unit)?, modifier: Modifier = Modifier) {
     Box(
@@ -899,19 +969,86 @@ private fun etaClock(seconds: Float): String {
 }
 
 @Composable
-private fun MapCredit(modifier: Modifier = Modifier) {
-    Text(
-        text = "Created by Derin Hakan Karakurt",
-        // The same weight as the LAT / LON captions above it: a credit line
-        // should not read louder than the coordinates it sits under.
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        fontSize = 11.sp,
-        maxLines = 1,
+private fun MapCredit(modifier: Modifier = Modifier, onHold: (() -> Unit)? = null) {
+    val scheme = MaterialTheme.colorScheme
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    // The same three second hold, drawn the same way, as the one that clears a
+    // mission off the aircraft. Moving home is the same kind of act: quiet,
+    // easy to do by accident, and expensive to get wrong.
+    val progress by animateFloatAsState(
+        targetValue = if (pressed && onHold != null) 1f else 0f,
+        animationSpec = if (pressed) {
+            tween(durationMillis = HOLD_MILLIS, easing = LinearEasing)
+        } else {
+            snap()
+        },
+        finishedListener = { if (it >= 1f) onHold?.invoke() },
+        label = "moveHome",
+    )
+    Box(
         modifier = modifier
             .clip(RoundedCornerShape(4.dp))
             .background(Color.Black.copy(alpha = 0.6f))
-            .padding(horizontal = 10.dp, vertical = 4.dp),
-    )
+            .then(
+                if (onHold == null) {
+                    Modifier
+                } else {
+                    // No tap action at all: the hold is the whole gesture, so
+                    // a stray press on a credit line does nothing.
+                    Modifier.clickable(interactionSource = interaction, indication = null) {}
+                },
+            ),
+    ) {
+        if (progress > 0f) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .fillMaxWidth(progress)
+                    .background(scheme.primary.copy(alpha = 0.3f)),
+            )
+        }
+        Text(
+            text = "Created by Derin Hakan Karakurt",
+            // The same weight as the LAT / LON captions above it: a credit line
+            // should not read louder than the coordinates it sits under.
+            color = scheme.onSurfaceVariant,
+            fontSize = 11.sp,
+            maxLines = 1,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+        )
+    }
+}
+
+/**
+ * Says the map is waiting for the new home, and offers a way out.
+ *
+ * Armed by a hold that leaves no other trace, so without this the map would
+ * look exactly as it did a moment ago while quietly meaning something
+ * different by the next tap.
+ */
+@Composable
+private fun MoveHomeBar(onCancel: () -> Unit, modifier: Modifier = Modifier) {
+    val scheme = MaterialTheme.colorScheme
+    Row(
+        modifier = modifier
+            .padding(bottom = 26.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(scheme.surface.copy(alpha = 0.92f))
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "Tap the map to move home",
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = scheme.onSurface,
+        )
+        TextButton(onClick = onCancel) {
+            Text("Cancel", fontSize = 12.sp)
+        }
+    }
 }
 
 @Composable
@@ -2727,6 +2864,7 @@ private fun VehicleMap(
     radarTiles: List<RadarTile>,
     adsbContacts: List<AdsbContact>,
     onMapTap: (GeoPoint) -> Unit,
+    homeHeldAt: GeoPoint?,
 ) {
     val trail = remember { mutableListOf<GeoPoint>() }
     // Held outside snapshot state on purpose: comparing the token here must not
@@ -2812,7 +2950,11 @@ private fun VehicleMap(
             val homeLon = vehicle.homeLon
             if (homeLat != null && homeLon != null) {
                 map.overlays += Marker(map).apply {
-                    position = GeoPoint(homeLat, homeLon)
+                    // The tapped place for as long as the question about it is
+                    // on screen, and where the aircraft says home is the rest
+                    // of the time. The badge shows where home is, not where it
+                    // has been asked to be.
+                    position = homeHeldAt ?: GeoPoint(homeLat, homeLon)
                     icon = homeIcon
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                     title = "Home"
