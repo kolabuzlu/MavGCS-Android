@@ -10,6 +10,7 @@ import android.hardware.usb.UsbManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.OptIn
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -18,6 +19,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
@@ -46,10 +48,13 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -759,69 +764,117 @@ fun VideoDialog(video: LiveVideo, onDismiss: () -> Unit) {
 fun FloatingVideo(video: LiveVideo, modifier: Modifier = Modifier) {
     if (!video.running) return
     val scheme = MaterialTheme.colorScheme
-    var offsetX by androidx.compose.runtime.remember { mutableStateOf(0f) }
-    var offsetY by androidx.compose.runtime.remember { mutableStateOf(0f) }
-    Column(
-        modifier = modifier
-            .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
-            .width(FloatingWidth)
-            // Opaque. At anything less the map's own toolbar reads straight
-            // through the title bar, and two sets of words on one strip is
-            // worse than either.
-            .background(Color.Black, RoundedCornerShape(6.dp))
-            .border(1.dp, scheme.outline, RoundedCornerShape(6.dp)),
+    var offsetX by remember { mutableStateOf(0f) }
+    var offsetY by remember { mutableStateOf(0f) }
+    var width by remember { mutableStateOf(FloatingWidth) }
+    // The room the map is giving it, so the corner cannot be dragged out to a
+    // size the window has nowhere to be.
+    BoxWithConstraints(
+        modifier = modifier.offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) },
     ) {
-        Row(
+        val room = maxOf(maxWidth, MinFloatingWidth)
+        val shown = width.coerceIn(MinFloatingWidth, room)
+        Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .height(26.dp)
-                .pointerInput(Unit) {
+                .width(shown)
+                // Opaque. At anything less the map's own toolbar reads straight
+                // through the title bar, and two sets of words on one strip is
+                // worse than either.
+                .background(Color.Black, RoundedCornerShape(6.dp))
+                .border(1.dp, scheme.outline, RoundedCornerShape(6.dp)),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(TitleBarHeight)
+                    .pointerInput(Unit) {
+                        detectDragGestures { _, drag ->
+                            offsetX += drag.x
+                            offsetY += drag.y
+                        }
+                    },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Live video",
+                    fontSize = 11.sp,
+                    color = Color.White.copy(alpha = 0.85f),
+                    modifier = Modifier.padding(start = 8.dp),
+                )
+                Box(Modifier.weight(1f))
+                IconButton(
+                    onClick = { video.floating = false },
+                    modifier = Modifier.size(24.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.OpenInFull,
+                        contentDescription = "Back to the window",
+                        tint = Color.White.copy(alpha = 0.85f),
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
+                IconButton(
+                    onClick = {
+                        video.floating = false
+                        video.stop()
+                    },
+                    modifier = Modifier.size(24.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Close,
+                        contentDescription = "Stop",
+                        tint = Color.White.copy(alpha = 0.85f),
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
+            }
+            VideoPicture(
+                video = video,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(16f / 9f),
+            )
+        }
+        // The grip. The picture's shape is fixed, so the corner is not free to
+        // go wherever the finger does -- it can only travel along the window's
+        // own diagonal. Putting the finger on the nearest point of that line
+        // rather than following one axis is what stops a diagonal drag, which
+        // is how anyone grabs a corner, from doing half of nothing.
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .size(ResizeGrip)
+                .pointerInput(room) {
                     detectDragGestures { _, drag ->
-                        offsetX += drag.x
-                        offsetY += drag.y
+                        // Read the width back out of the state on every event.
+                        // Taken from the value composition handed down instead,
+                        // each event would measure from where the window was
+                        // when the finger landed, so a drag of a hundred small
+                        // steps would end up applying only the last one -- a
+                        // three hundred pixel pull moved the corner by six.
+                        val now = width.coerceIn(MinFloatingWidth, room)
+                        val tall = (TitleBarHeight.value + now.value * 9f / 16f) / now.value
+                        val step = (drag.x + tall * drag.y) / (1f + tall * tall)
+                        width = (now + step.toDp()).coerceIn(MinFloatingWidth, room)
                     }
                 },
-            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                text = "Live video",
-                fontSize = 11.sp,
-                color = Color.White.copy(alpha = 0.85f),
-                modifier = Modifier.padding(start = 8.dp),
-            )
-            Box(Modifier.weight(1f))
-            IconButton(
-                onClick = { video.floating = false },
-                modifier = Modifier.size(24.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.OpenInFull,
-                    contentDescription = "Back to the window",
-                    tint = Color.White.copy(alpha = 0.85f),
-                    modifier = Modifier.size(14.dp),
-                )
-            }
-            IconButton(
-                onClick = {
-                    video.floating = false
-                    video.stop()
-                },
-                modifier = Modifier.size(24.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Close,
-                    contentDescription = "Stop",
-                    tint = Color.White.copy(alpha = 0.85f),
-                    modifier = Modifier.size(14.dp),
-                )
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val edge = size.minDimension
+                val ink = Color.White.copy(alpha = 0.7f)
+                // Two strokes across the corner, longer one outside, which is
+                // the grip every desktop window uses.
+                listOf(0.34f to 0.90f, 0.58f to 0.90f).forEach { (from, to) ->
+                    drawLine(
+                        color = ink,
+                        start = Offset(edge * from, edge * to),
+                        end = Offset(edge * to, edge * from),
+                        strokeWidth = edge * 0.07f,
+                        cap = StrokeCap.Round,
+                    )
+                }
             }
         }
-        VideoPicture(
-            video = video,
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(16f / 9f),
-        )
     }
 }
 
@@ -834,3 +887,11 @@ fun VideoLifecycle(video: LiveVideo) {
 }
 
 private val FloatingWidth = 360.dp
+
+/** Small enough to tuck away, still big enough to read the picture. */
+private val MinFloatingWidth = 200.dp
+
+private val TitleBarHeight = 26.dp
+
+/** A finger's worth of corner, larger than the marks drawn inside it. */
+private val ResizeGrip = 30.dp
