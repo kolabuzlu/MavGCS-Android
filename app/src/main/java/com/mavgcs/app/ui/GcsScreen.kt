@@ -1094,20 +1094,32 @@ private fun ArmPad(
     // Mixed from the one green rather than picked separately. The palette has
     // already been through a round of near-miss greens that read as a rendering
     // fault, and a fourth would start it again.
-    val readyFill = MavGreen.copy(alpha = ReadyToArmTint).compositeOver(scheme.surfaceVariant)
+    val readyFill = MavGreen.copy(alpha = ArmStateTint).compositeOver(scheme.surfaceVariant)
+    // And the same mix in the app's one amber for the state before it. Both
+    // are hints at the same strength, so neither shouts over the other and the
+    // pair reads as one indicator changing colour rather than two ideas.
+    val notReadyFill = ModePending.copy(alpha = ArmStateTint).compositeOver(scheme.surfaceVariant)
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(metrics.controlGap)) {
         // Each button lights for the state the vehicle is actually in rather
         // than for the action it performs: green while armed, red while not, so
         // a glance says whether the props are live.
         HoldButton(
-            // Three things to say, and the button says whichever is true: the
-            // aircraft will not accept an arm command, it will, or it already
-            // has. NOT READY replaces the word ARM rather than qualifying it,
-            // because a button offering to do something the vehicle has
-            // already refused is the wrong thing to read at a glance. The
-            // press still goes out, and holding still force-arms, which is
-            // exactly the state where that is the useful gesture.
-            label = if (!armed && !readyToArm) "NOT READY" else "ARM",
+            // The button names the aircraft's state rather than the action, in
+            // all three cases: it will not accept an arm command, it will, or
+            // it already has. That is the same rule the colours have always
+            // followed, and reading the state is what a glance is for -- a
+            // control offering to do something the vehicle has already refused,
+            // or already done, is the wrong thing to find there.
+            //
+            // What it does is unchanged throughout. A press still sends the arm
+            // command and is still the autopilot's to refuse, and a hold still
+            // force-arms, which is exactly the state where that is the gesture
+            // worth having.
+            label = when {
+                armed -> "ARMED"
+                readyToArm -> "ARM"
+                else -> "NOT READY"
+            },
             holdLabel = "FORCE\u2026",
             // Only while it means something: the check is defined as always
             // passing once armed, so the caption would be stating a formality.
@@ -1116,7 +1128,7 @@ private fun ArmPad(
             containerColor = when {
                 armed -> scheme.primary
                 readyToArm -> readyFill
-                else -> scheme.surfaceVariant
+                else -> notReadyFill
             },
             contentColor = if (armed) scheme.onPrimary else scheme.onSurface,
             border = if (armed) null else BorderStroke(1.dp, scheme.outline),
@@ -1142,7 +1154,10 @@ private fun ArmPad(
             modifier = Modifier.weight(1f),
         )
         HoldButton(
-            label = "DISARM",
+            // The state, like its neighbour: red and DISARMED while the
+            // propellers are safe, grey and DISARM while there is something to
+            // do. The hold still disarms either way.
+            label = if (armed) "DISARM" else "DISARMED",
             holdLabel = "HOLD\u2026",
             enabled = enabled,
             containerColor = if (armed) scheme.surfaceVariant else scheme.error,
@@ -2240,12 +2255,12 @@ private val NavTargetColor = Color(0xFFFF2FD0)
  * colour this bright is barely there.
  */
 /**
- * How much of the one green goes into the ready-to-arm fill.
+ * How much colour goes into the two hint fills on the ARM button.
  *
- * Low on purpose. It has to be unmistakable beside the grey of a vehicle that
- * will not arm, and unmistakably *not* the solid green of one that already has.
+ * Low on purpose. Each has to be unmistakable at a glance, and unmistakably
+ * *not* the solid green of a vehicle that is already armed.
  */
-private const val ReadyToArmTint = 0.22f
+private const val ArmStateTint = 0.22f
 
 /**
  * How far the caption before a button's label is faded. Size is unchanged.
