@@ -29,6 +29,7 @@ import io.dronefleet.mavlink.common.MissionSetCurrent
 import io.dronefleet.mavlink.common.HomePosition
 import io.dronefleet.mavlink.common.NavControllerOutput
 import io.dronefleet.mavlink.common.ParamSet
+import io.dronefleet.mavlink.common.ParamValue
 import io.dronefleet.mavlink.common.MavCmd
 import io.dronefleet.mavlink.common.MavFrame
 import io.dronefleet.mavlink.common.MavParamType
@@ -70,12 +71,14 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.SocketException
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
+import kotlin.math.abs
 import kotlin.math.asin
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -138,6 +141,8 @@ class MavlinkClient {
     /** Guards the upload state machine, which the parse and tx threads share. */
     private val missionLock = Any()
     private var missionPending: List<MissionPoint>? = null
+    private var clearWanted: String? = null
+    private var clearUntilMs = 0L
     private var missionState: MissionState? = null
     private var missionRestart = true
 
@@ -351,11 +356,8 @@ class MavlinkClient {
             // lost" while the link meter beside it said 1.5%, which sent the
             // search to the wrong end of the problem. Twenty-one presses later
             // the aircraft still had not acknowledged one of them.
-            val quality = _state.value.link
-            val loss = quality.lossPercent
-            val hearing = quality.rxPerSec > 1f
             note(
-                if (hearing && loss != null && loss < ONE_WAY_LOSS_PERCENT) {
+                if (linkSoundsOneWay()) {
                     "Mode change to $label was not acknowledged, though " +
                         "telemetry is arriving normally. The aircraft is being " +
                         "heard but is not hearing this app - check that the " +
@@ -387,6 +389,7 @@ class MavlinkClient {
     private fun onCommandAck(ack: CommandAck) {
         val command = runCatching { ack.command().entry() }.getOrNull()
         val result = runCatching { ack.result().entry() }.getOrNull()
+        command?.let { awaited.remove(it) }
         // Every answer to the log, accepted ones included. A command that is
         // accepted and then does not happen is a different fault from one that
         // never arrived, and only the log can tell them apart.
@@ -399,8 +402,7 @@ class MavlinkClient {
         // line and nothing more: narrating it would put a row of identical
         // complaints where the aircraft's own PreArm messages should be.
         if (command in HOUSEKEEPING) return
-        val what = command?.name?.removePrefix("MAV_CMD_")?.replace('_', ' ')?.lowercase()
-            ?: "the command"
+        val what = spoken(command)
         val why = when (result) {
             MavResult.MAV_RESULT_TEMPORARILY_REJECTED ->
                 "not right now - the aircraft is busy or not in a state to do it"
@@ -416,6 +418,53 @@ class MavlinkClient {
             _state.update { it.copy(modePending = null) }
         }
     }
+
+    /** What the aircraft says it is holding for a parameter that was set. */
+    private fun onParamValue(payload: ParamValue) {
+        val id = runCatching { payload.paramId() }.getOrNull()
+            ?.trim { it <= ' ' } ?: return
+        val wanted = synchronized(paramLock) {
+            val pending = paramAwaited
+            if (pending == null || pending.id != id) return
+            paramAwaited = null
+            pending
+        }
+        val got = payload.paramValue()
+        note(
+            if (abs(got - wanted.asked) < PARAM_SAME_ENOUGH) {
+                "${wanted.what} is now ${round(got)}${wanted.unit}."
+            } else {
+                "${wanted.what} is now ${round(got)}${wanted.unit} - the " +
+                    "aircraft would not take ${round(wanted.asked)}${wanted.unit}."
+            },
+        )
+    }
+
+    /** Say so if a parameter write is never answered. */
+    private fun sweepParam() {
+        val late = synchronized(paramLock) {
+            val pending = paramAwaited ?: return
+            if (System.currentTimeMillis() < pending.dueMs) return
+            paramAwaited = null
+            pending
+        }
+        note(
+            if (linkSoundsOneWay()) {
+                "The aircraft did not answer the ${late.what.lowercase()}, " +
+                    "though telemetry is arriving normally. It is being heard " +
+                    "but is not hearing this app - check that the radio link " +
+                    "carries both directions."
+            } else {
+                "The aircraft did not answer the ${late.what.lowercase()} - " +
+                    "too much of the link is being lost. Try it again."
+            },
+        )
+    }
+
+    /** Metres, without a trailing zero nobody needs. */
+    private fun round(value: Float): String =
+        if (abs(value - value.toInt()) < 0.05f) value.toInt().toString()
+        else "%.1f".format(Locale.ROOT, value)
 
     /** Nothing outstanding any more, whatever the reason. */
     private fun clearModeRequest() {
@@ -444,6 +493,103 @@ class MavlinkClient {
                 "timed out"
             text.contains("EACCES", true) -> "permission denied"
             else -> error.javaClass.simpleName
+        }
+    }
+
+    /**
+     * Telemetry arriving cleanly while nothing answers what is being sent.
+     *
+     * The two ways a request goes unanswered want opposite advice, and the
+     * link meter is what separates them: a radio dropping a third of its
+     * frames will swallow a command now and then, and pressing again is the
+     * cure. A radio carrying telemetry down and nothing up will swallow every
+     * one of them, and pressing again is a waste of the pilot's attention.
+     */
+    private fun linkSoundsOneWay(): Boolean {
+        val quality = _state.value.link
+        val loss = quality.lossPercent
+        return quality.rxPerSec > 1f && loss != null && loss < ONE_WAY_LOSS_PERCENT
+    }
+
+    /** A command's name as it should be read out. */
+    private fun spoken(command: MavCmd?): String =
+        command?.name?.removePrefix("MAV_CMD_")?.replace('_', ' ')?.lowercase()
+            ?: "the command"
+
+    private data class Awaited(val what: String, val dueMs: Long)
+
+    private data class ParamAwaited(
+        val id: String,
+        val what: String,
+        val asked: Float,
+        val unit: String,
+        val dueMs: Long,
+    )
+
+    /**
+     * The parameter write waiting to be confirmed.
+     *
+     * A parameter is not a command and gets no COMMAND_ACK; the autopilot
+     * answers with the value it ended up holding. That answer was being
+     * thrown away, which left the loiter radius the one control in the app
+     * that could not be checked by any means at all -- the map shows no
+     * radius, and a write that was dropped, refused or clamped looked exactly
+     * like one that took.
+     *
+     * Worth reading rather than merely counting, because the value that comes
+     * back is often not the one asked for: ArduPilot holds WP_LOITER_RAD to
+     * its own limits, and a plane quietly orbiting at a radius the pilot did
+     * not choose is the thing to say out loud.
+     */
+    private val paramLock = Any()
+    private var paramAwaited: ParamAwaited? = null
+
+    /**
+     * Commands sent and not yet answered.
+     *
+     * Only the mode change used to be watched, so every other button was
+     * fire and forget: arm, disarm, the guided controls, the reposition. On a
+     * link that silently dropped all of them -- which is what an ExpressLRS
+     * radio was doing until the frames were trimmed -- the app said a cheerful
+     * nothing while the aircraft did a cheerful nothing.
+     *
+     * Reported, never resent. An autopilot answers a command it has already
+     * obeyed, so a missing answer can mean the command arrived and the answer
+     * did not, and quietly running preflight calibration a second time, or
+     * re-arming behind the pilot's back, is worse than saying so once. Keyed
+     * by command, so pressing a button twice replaces its own entry rather
+     * than queueing a second complaint.
+     */
+    private val awaited = ConcurrentHashMap<MavCmd, Awaited>()
+
+    /** Start expecting an answer to [command]. */
+    private fun expect(command: MavCmd) {
+        // The mode has its own watcher, which also resends; two of them would
+        // talk over each other. The stream setup the app does for itself is
+        // not the pilot's business either way.
+        if (command == MavCmd.MAV_CMD_DO_SET_MODE || command in HOUSEKEEPING) return
+        awaited[command] = Awaited(
+            spoken(command),
+            System.currentTimeMillis() + COMMAND_ANSWER_MS,
+        )
+    }
+
+    /** Say so about anything that has run out of time to answer. */
+    private fun sweepAwaited() {
+        val now = System.currentTimeMillis()
+        awaited.entries.filter { now >= it.value.dueMs }.forEach { entry ->
+            awaited.remove(entry.key)
+            note(
+                if (linkSoundsOneWay()) {
+                    "The aircraft did not answer ${entry.value.what}, though " +
+                        "telemetry is arriving normally. It is being heard but " +
+                        "is not hearing this app - check that the radio link " +
+                        "carries both directions."
+                } else {
+                    "The aircraft did not answer ${entry.value.what} - too " +
+                        "much of the link is being lost. Try it again."
+                },
+            )
         }
     }
 
@@ -494,6 +640,15 @@ class MavlinkClient {
             .paramType(MavParamType.MAV_PARAM_TYPE_REAL32)
             .build()
         connection.send2(GCS_SYSTEM_ID, GCS_COMPONENT_ID, request)
+        synchronized(paramLock) {
+            paramAwaited = ParamAwaited(
+                id = LOITER_RADIUS_PARAM,
+                what = "Loiter radius",
+                asked = meters,
+                unit = " m",
+                dueMs = System.currentTimeMillis() + COMMAND_ANSWER_MS,
+            )
+        }
     }
 
     /**
@@ -519,6 +674,7 @@ class MavlinkClient {
                 .z(altitudeM)
                 .build()
             connection.send2(GCS_SYSTEM_ID, GCS_COMPONENT_ID, payload)
+            expect(MavCmd.MAV_CMD_DO_REPOSITION)
         }
 
     private fun guided(description: String, block: (MavlinkConnection, Int, Int) -> Unit) {
@@ -713,6 +869,9 @@ class MavlinkClient {
                 while (running.get() && !Thread.currentThread().isInterrupted) {
                     runCatching { tx.execute { runCatching { sendHeartbeat(connection) } } }
                     runCatching { driveModeRequest() }
+                    runCatching { driveMissionClear() }
+                    runCatching { sweepAwaited() }
+                    runCatching { sweepParam() }
                     runCatching {
                         val sample = linkStats.sample(System.currentTimeMillis())
                         _state.update { it.copy(link = sample) }
@@ -866,6 +1025,7 @@ class MavlinkClient {
             // the radio for a refusal sends the pilot to look in the wrong
             // place entirely.
             is CommandAck -> onCommandAck(payload)
+            is ParamValue -> onParamValue(payload)
             is SysStatus -> _state.update {
                 it.copy(
                     sensorsPresent = payload.onboardControlSensorsPresent().value(),
@@ -1185,23 +1345,87 @@ class MavlinkClient {
      *
      * ArduPilot silently refuses to clear a mission it is actively flying in
      * AUTO -- the identical clear works at once in LOITER -- so the mode change
-     * goes first and the clear follows once it has had time to take effect
-     * onboard. Any upload in flight is abandoned too, or its stale
+     * goes first and the clear only follows once a heartbeat says the aircraft
+     * is really in it. Any upload in flight is abandoned too, or its stale
      * acknowledgement would arrive later and be read as this clear's result.
+     *
+     * It used to send the mode once, sleep half a second and send the clear
+     * regardless. One lost frame and the aircraft stayed in AUTO, refused the
+     * clear without a word, and carried on flying a mission the map had
+     * already rubbed out. Going through the Flight Mode panel's own path
+     * instead means the mode is resent until it takes and the pilot is told
+     * when it does not, and waiting for the heartbeat means the clear is only
+     * sent when it can actually work.
      */
     fun clearMission() {
         val connection = connectionRef.get() ?: return
         val (sys, comp) = target.get() ?: return
+        resetMission()
+        val snapshot = _state.value
+        val custom = when (snapshot.firmware) {
+            Firmware.PX4 -> FlightModes.px4CustomMode(GcsCommand.LOITER)
+            else -> FlightModes.ardupilotCustomMode(snapshot.vehicleType, GcsCommand.LOITER)
+        }
+        if (custom == null) {
+            // Firmware with no loiter to ask for. Nothing to wait on, so send
+            // the clear and let its acknowledgement speak for it.
+            beginClear(connection, sys, comp)
+            return
+        }
+        // Derived exactly as the heartbeat derives the mode it will be
+        // compared against. Naming it any other way makes a string that can
+        // never match, and a clear that waits out its whole window and then
+        // reports a mode change that had in fact already happened.
+        val label = when (snapshot.firmware) {
+            Firmware.ARDUPILOT -> FlightModes.ardupilotMode(snapshot.vehicleType, custom)
+            Firmware.PX4 -> FlightModes.px4ModeName(custom)
+            Firmware.UNKNOWN -> "MODE $custom"
+        }
+        setFlightMode(label, custom)
+        synchronized(missionLock) {
+            clearWanted = label
+            clearUntilMs = System.currentTimeMillis() + MISSION_CLEAR_WAIT_MS
+        }
+    }
+
+    /** Send the clear, and watch for the acknowledgement that settles it. */
+    private fun beginClear(connection: MavlinkConnection, sys: Int, comp: Int) {
+        synchronized(missionLock) { missionState = MissionState.CLEARING }
         tx.execute {
-            resetMission()
             runCatching {
-                setMode(connection, sys, _state.value, GcsCommand.LOITER)
-                Thread.sleep(MISSION_CLEAR_SETTLE_MS)
                 sendMissionClear(connection, sys, comp)
                 Log.i(TAG, "Sent mission clear")
             }.onFailure { error ->
                 Log.w(TAG, "Could not clear the mission: " + error.message)
             }
+        }
+    }
+
+    /**
+     * Send the waiting clear once the aircraft is in the mode that allows it.
+     *
+     * Driven from the heartbeat thread rather than waited for inline: the
+     * sending thread is a single one, and blocking it here would stop the very
+     * mode retries this is waiting on.
+     */
+    private fun driveMissionClear() {
+        val (wanted, deadline) = synchronized(missionLock) {
+            (clearWanted ?: return) to clearUntilMs
+        }
+        if (_state.value.mode.equals(wanted, ignoreCase = true)) {
+            synchronized(missionLock) { clearWanted = null }
+            val connection = connectionRef.get() ?: return
+            val (sys, comp) = target.get() ?: return
+            beginClear(connection, sys, comp)
+            return
+        }
+        if (System.currentTimeMillis() >= deadline) {
+            synchronized(missionLock) { clearWanted = null }
+            note(
+                "The mission was not cleared - the aircraft never went into " +
+                    "$wanted, and it will not clear a mission it is flying. " +
+                    "It is still flying it.",
+            )
         }
     }
 
@@ -1251,6 +1475,21 @@ class MavlinkClient {
                                 .build(),
                         )
                     }
+                }
+            }
+
+            // A clear asked for on its own, rather than to make room for an
+            // upload. Only this settles what the aircraft is holding, which is
+            // why the map keeps drawing the old mission until it arrives.
+            MissionState.CLEARING -> {
+                resetMission()
+                val accepted = payload.type().entry() == MavMissionResult.MAV_MISSION_ACCEPTED
+                if (accepted) {
+                    _state.update { it.copy(missionCleared = it.missionCleared + 1) }
+                    Log.i(TAG, "Mission cleared")
+                } else {
+                    Log.w(TAG, "Mission clear refused: " + payload.type().entry())
+                    note("The aircraft would not clear the mission: " + payload.type().entry())
                 }
             }
 
@@ -1329,7 +1568,7 @@ class MavlinkClient {
 
     private data class MissionPoint(val lat: Double, val lon: Double, val altM: Float)
 
-    private enum class MissionState { AWAITING_CLEAR_ACK, UPLOADING }
+    private enum class MissionState { AWAITING_CLEAR_ACK, UPLOADING, CLEARING }
 
     /**
      * Ask the vehicle for the message rates this app actually wants.
@@ -1504,6 +1743,7 @@ class MavlinkClient {
             .param7(param7)
             .build()
         connection.send2(GCS_SYSTEM_ID, GCS_COMPONENT_ID, payload)
+        expect(command)
     }
 
     private fun setMode(
@@ -1695,7 +1935,26 @@ class MavlinkClient {
          * the clear follows it. ArduPilot ignores a clear that arrives
          * while it is still in AUTO.
          */
-        private const val MISSION_CLEAR_SETTLE_MS = 500L
+        /**
+         * How long a command has to be answered before the app says it was not.
+         *
+         * An autopilot answers the moment it has read one, so this is almost
+         * all link: long enough for a slow radio's downlink to find room for
+         * the acknowledgement, short enough that the pilot is not left
+         * believing a button worked.
+         */
+        private const val COMMAND_ANSWER_MS = 5_000L
+
+        /** Close enough that the aircraft took the value that was asked for. */
+        private const val PARAM_SAME_ENOUGH = 0.05f
+
+        /**
+         * How long to wait for the mode the clear needs before giving up.
+         *
+         * A little beyond the mode's own retry window, so the answer is
+         * whether the mode ever took rather than whether it took in time.
+         */
+        private const val MISSION_CLEAR_WAIT_MS = 12_000L
         private const val HEARTBEAT_INTERVAL_MS = 1000L
 
         /** How often an unconfirmed mode request goes back on the wire. */

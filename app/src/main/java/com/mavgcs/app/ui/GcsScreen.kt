@@ -243,6 +243,12 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
             }
         }
     }
+    // Same rule for throwing one away. Clearing the map on the press showed an
+    // empty mission over an aircraft still flying the old one whenever the
+    // clear did not land.
+    LaunchedEffect(vehicle.missionCleared) {
+        if (vehicle.missionCleared > 0) sentMission = emptyList()
+    }
     var followUav by remember { mutableStateOf(true) }
     var hybridMap by remember { mutableStateOf(false) }
     var showGuides by remember { mutableStateOf(true) }
@@ -547,8 +553,11 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                                 sentMission = emptyList()
                             },
                             onClearVehicle = {
+                                // The queue is this app's own staging area and
+                                // goes at once. What the aircraft is holding is
+                                // rubbed out by its acknowledgement, not by the
+                                // press -- see missionCleared above.
                                 waypointQueue.clear()
-                                sentMission = emptyList()
                                 viewModel.clearMission()
                             },
                         )

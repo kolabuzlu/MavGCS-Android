@@ -84,6 +84,8 @@ data class VehicleState(
      * failed or lost upload keeps showing as pending.
      */
     val missionAccepted: Int = 0,
+    /** Bumped when the aircraft confirms it has thrown its mission away. */
+    val missionCleared: Int = 0,
     /** SYS_STATUS's three sensor bitmasks, carried whole. */
     val sensorsPresent: Int? = null,
     val sensorsEnabled: Int? = null,
