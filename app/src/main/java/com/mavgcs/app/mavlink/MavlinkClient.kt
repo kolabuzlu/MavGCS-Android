@@ -7,10 +7,12 @@ import io.dronefleet.mavlink.ardupilotmega.Rangefinder
 import io.dronefleet.mavlink.ardupilotmega.Wind
 import io.dronefleet.mavlink.common.Attitude
 import io.dronefleet.mavlink.common.BatteryStatus
+import io.dronefleet.mavlink.common.CommandAck
 import io.dronefleet.mavlink.common.CommandInt
 import io.dronefleet.mavlink.common.CommandLong
 import io.dronefleet.mavlink.common.DistanceSensor
 import io.dronefleet.mavlink.common.GlobalPositionInt
+import io.dronefleet.mavlink.common.MavResult
 import io.dronefleet.mavlink.ardupilotmega.EkfStatusFlags
 import io.dronefleet.mavlink.ardupilotmega.EkfStatusReport
 import io.dronefleet.mavlink.common.GpsRawInt
@@ -341,15 +343,72 @@ class MavlinkClient {
         }
         abandoned?.let { label ->
             _state.update { it.copy(modePending = null) }
+            // Two very different failures used to be reported as one. A command
+            // can go unanswered because the link is dropping frames, and then
+            // pressing again is the right advice. It can also go unanswered
+            // because the radio carries telemetry down but nothing up -- and on
+            // one of those the old message read "too much of the link is being
+            // lost" while the link meter beside it said 1.5%, which sent the
+            // search to the wrong end of the problem. Twenty-one presses later
+            // the aircraft still had not acknowledged one of them.
+            val quality = _state.value.link
+            val loss = quality.lossPercent
+            val hearing = quality.rxPerSec > 1f
             note(
-                "Mode change to $label was not acknowledged - too much of the " +
-                    "link is being lost. Press it again.",
+                if (hearing && loss != null && loss < ONE_WAY_LOSS_PERCENT) {
+                    "Mode change to $label was not acknowledged, though " +
+                        "telemetry is arriving normally. The aircraft is being " +
+                        "heard but is not hearing this app - check that the " +
+                        "radio link carries both directions."
+                } else {
+                    "Mode change to $label was not acknowledged - too much of " +
+                        "the link is being lost. Press it again."
+                },
             )
         }
         resend?.let { (_, custom) ->
             val connection = connectionRef.get() ?: return
             val (sys, comp) = target.get() ?: return
             tx.execute { runCatching { sendModeChange(connection, sys, comp, custom) } }
+        }
+    }
+
+    /**
+     * The aircraft's verdict on a command, said out loud.
+     *
+     * Only when it is not a plain acceptance: an accepted command proves
+     * itself when the heartbeat comes back in the new mode, and narrating
+     * every success would bury the vehicle's own messages.
+     *
+     * A refused mode change also stops being pending immediately. Holding the
+     * button amber and resending for ten more seconds is pointless once the
+     * aircraft has said no, and it delays telling the pilot why.
+     */
+    private fun onCommandAck(ack: CommandAck) {
+        val command = runCatching { ack.command().entry() }.getOrNull()
+        val result = runCatching { ack.result().entry() }.getOrNull()
+        // Every answer to the log, accepted ones included. A command that is
+        // accepted and then does not happen is a different fault from one that
+        // never arrived, and only the log can tell them apart.
+        Log.i(TAG, "ACK ${command?.name ?: "?"} -> ${result?.name ?: "?"}")
+        if (result == MavResult.MAV_RESULT_ACCEPTED || result == MavResult.MAV_RESULT_IN_PROGRESS) {
+            return
+        }
+        val what = command?.name?.removePrefix("MAV_CMD_")?.replace('_', ' ')?.lowercase()
+            ?: "the command"
+        val why = when (result) {
+            MavResult.MAV_RESULT_TEMPORARILY_REJECTED ->
+                "not right now - the aircraft is busy or not in a state to do it"
+            MavResult.MAV_RESULT_DENIED -> "refused"
+            MavResult.MAV_RESULT_UNSUPPORTED -> "not supported by this firmware"
+            MavResult.MAV_RESULT_FAILED -> "tried and failed"
+            MavResult.MAV_RESULT_CANCELLED -> "cancelled"
+            else -> "answered ${result?.name ?: "with something unrecognised"}"
+        }
+        note("The aircraft $why: $what.")
+        if (command == MavCmd.MAV_CMD_DO_SET_MODE) {
+            clearModeRequest()
+            _state.update { it.copy(modePending = null) }
         }
     }
 
@@ -525,7 +584,10 @@ class MavlinkClient {
                         // Whoever just spoke is who to answer. When dialling out
                         // the peer is the one that was asked for, whatever port
                         // it happens to reply from.
-                        remote.set(InetSocketAddress(packet.address, packet.port))
+                        val from = InetSocketAddress(packet.address, packet.port)
+                        if (remote.getAndSet(from) != from) {
+                            Log.i(TAG, "peer ${from.address.hostAddress}:${from.port}")
+                        }
                     }
                     input.offer(buffer.copyOf(packet.length))
                 } catch (_: java.net.SocketTimeoutException) {
@@ -710,6 +772,17 @@ class MavlinkClient {
                 val raw = payload.rssi()
                 it.copy(rssiPercent = if (raw >= 255) null else raw * 100f / 254f)
             }
+            // What the aircraft made of a command it was sent.
+            //
+            // Ignored entirely until now, which left the app guessing. A mode
+            // that did not take was reported as the link losing too much,
+            // because that was the only explanation the app had -- it waited
+            // ten seconds for a heartbeat in the new mode and gave up. But an
+            // autopilot answers every command, and a refusal is not silence:
+            // it says so, and says which of several things it means. Blaming
+            // the radio for a refusal sends the pilot to look in the wrong
+            // place entirely.
+            is CommandAck -> onCommandAck(payload)
             is SysStatus -> _state.update {
                 it.copy(
                     sensorsPresent = payload.onboardControlSensorsPresent().value(),
@@ -842,9 +915,21 @@ class MavlinkClient {
         if (typeName.endsWith("GCS") || typeValue == 6) return
         val now = System.currentTimeMillis()
         val first = target.get() == null
-        val firstContact = target.getAndSet(
-            message.originSystemId to message.originComponentId,
-        ) == null
+        val speaker = message.originSystemId to message.originComponentId
+        val was = target.getAndSet(speaker)
+        val firstContact = was == null
+        // Commands are addressed to whoever sent the last heartbeat, so a
+        // second component appearing on the link silently takes them over. It
+        // is the explanation that fits a vehicle that is heard perfectly and
+        // obeys nothing, so the day it happens the log should say so rather
+        // than leave it to be deduced.
+        if (was != null && was != speaker) {
+            Log.i(
+                TAG,
+                "target moved ${was.first}/${was.second} -> " +
+                    "${speaker.first}/${speaker.second} $typeName($typeValue)",
+            )
+        }
         // Read off this heartbeat, above the block that needs it. It used to be
         // worked out below, after the stream rates had already been sent, which
         // left those rates deciding what to ask a PX4 for while still believing
@@ -1541,6 +1626,16 @@ class MavlinkClient {
         private const val SILENT_LINK_MS = 10_000L
 
         private const val MODE_RETRY_EVERY_MS = 1000L
+
+        /**
+         * Below this much loss a silent command is not the link dropping it.
+         *
+         * Every retry inside the window has to vanish for a command to be
+         * abandoned at all, which chance alone will not do at a few percent.
+         * Set well above the couple of percent a healthy radio shows and well
+         * below the third or more that actually swallows a whole burst.
+         */
+        private const val ONE_WAY_LOSS_PERCENT = 15f
 
         /**
          * How long to keep trying before admitting it is not getting through.
