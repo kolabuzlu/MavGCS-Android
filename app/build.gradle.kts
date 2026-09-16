@@ -28,7 +28,7 @@ android {
         targetSdk = 35
         // The code has to climb for Android to see an update at all; the name
         // is what people read.
-        versionCode = 17
+        versionCode = 18
         versionName = "1.1.0"
         vectorDrawables.useSupportLibrary = true
     }
