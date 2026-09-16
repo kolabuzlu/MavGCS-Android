@@ -96,6 +96,11 @@ dependencies {
     // Serves the bundled Cesium build from a real origin, so the page is
     // subject to ordinary CORS rather than needing the filesystem opened up.
     implementation("androidx.webkit:webkit:1.12.1")
+    // Live video. The RTSP source is a separate artifact from the player, and
+    // both are needed: the player alone cannot open an rtsp:// address.
+    implementation("androidx.media3:media3-exoplayer:1.4.1")
+    implementation("androidx.media3:media3-exoplayer-rtsp:1.4.1")
+    implementation("androidx.media3:media3-ui:1.4.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
 }

@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -221,6 +222,11 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
     var showFlyToLatLon by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var showFind by remember { mutableStateOf(false) }
+    var showVideo by remember { mutableStateOf(false) }
+    // Held here rather than inside the dialog so the stream keeps running while
+    // the window is closed, which is the whole point of the floating mode.
+    val video = remember { LiveVideo() }
+    VideoLifecycle(video)
     // Points the pilot has clicked but not yet sent, and the batch that was
     // sent last -- kept apart so Update knows what is actually on the vehicle.
     var queueWaypoints by remember { mutableStateOf(false) }
@@ -589,6 +595,15 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                         horizontalAlignment = Alignment.End,
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
+                        // Above the compass, in the same stack, so it belongs
+                        // to the map's own corner rather than landing loose on
+                        // the imagery.
+                        MapIconButton(
+                            icon = Icons.Filled.Videocam,
+                            description = "Live video",
+                            active = video.running,
+                            onClick = { showVideo = true },
+                        )
                         CompassRose(vehicle = vehicle, size = instrumentSize)
                         TerrainRadar(vehicle = vehicle, size = instrumentSize)
                         Text(
@@ -598,6 +613,17 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                             modifier = Modifier
                                 .background(Color.Black.copy(alpha = 0.45f))
                                 .padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                    }
+                    if (video.floating) {
+                        FloatingVideo(
+                            video = video,
+                            modifier = Modifier
+                                .align(Alignment.TopStart)
+                                // Clear of the map's own toolbar, which owns
+                                // the top strip. It can be dragged anywhere
+                                // from here; this is only where it arrives.
+                                .padding(start = 12.dp, top = 52.dp),
                         )
                     }
                 }
@@ -661,6 +687,10 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
             onDismiss = { showSettings = false },
             onRatesChanged = viewModel::applyStreamRates,
         )
+    }
+
+    if (showVideo) {
+        VideoDialog(video = video, onDismiss = { showVideo = false })
     }
 
     if (showFind) {
@@ -1179,6 +1209,42 @@ private fun ArmPad(
  * A completed hold also has to swallow the tap, because the release that ends
  * it still reaches onClick and would otherwise fire both actions.
  */
+/**
+ * A control that lives on the map rather than in a panel.
+ *
+ * Dark and translucent like the attribution beneath it, so it reads as part of
+ * the map's furniture instead of a piece of the instrument panel that has
+ * drifted onto the imagery. Lights in the panel's green while it is doing
+ * something, which is the same rule every other control here follows.
+ */
+@Composable
+private fun MapIconButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    description: String,
+    active: Boolean,
+    onClick: () -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    Box(
+        modifier = Modifier
+            .size(34.dp)
+            .background(
+                color = if (active) scheme.primary else Color.Black.copy(alpha = 0.45f),
+                shape = RoundedCornerShape(6.dp),
+            )
+            .border(1.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(6.dp))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = description,
+            tint = if (active) scheme.onPrimary else Color.White.copy(alpha = 0.9f),
+            modifier = Modifier.size(18.dp),
+        )
+    }
+}
+
 @Composable
 private fun HoldButton(
     label: String,
@@ -1382,7 +1448,7 @@ private val SegmentedHeight = 34.dp
  * takes comes off the map.
  */
 @Composable
-private fun <T> SegmentedChoice(
+internal fun <T> SegmentedChoice(
     options: List<Pair<T, String>>,
     selected: T,
     onSelect: (T) -> Unit,
