@@ -14,8 +14,10 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -74,9 +76,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ClipOp
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -1449,12 +1455,139 @@ private fun DrawScope.drawNotchedBorder(color: Color, labelWidth: Float) {
 
 private val SegmentedHeight = 34.dp
 
+/** The paddle's own colour, where the accent has not reached it. */
+private val RockerPlastic = Color(0xFF2E2E33)
+
+/** The width of the lit edge, as a share of the paddle's width. */
+private const val RockerBand = 0.13f
+
+/**
+ * A rocker switch: a chamfered housing with a paddle hinged down its middle.
+ *
+ * The tilt is not drawn by changing the paddle's shape. A real rocker seen
+ * straight on stays a full rectangle whichever way it is thrown -- what moves
+ * is the light. The end that is up turns its sloped face towards the lamp and
+ * throws a bright band down its edge; the end that is down falls into its own
+ * shadow. So the paddle here is a plain rounded rectangle and the highlight
+ * slides from one end to the other, which is the whole of the animation.
+ *
+ * An earlier attempt foreshortened the pressed half into a trapezoid. It read
+ * as a wedge rather than a switch: the shape of a rocker does not change, only
+ * its shading does.
+ *
+ * [tilt] runs from -1, left end down, to +1, right end down.
+ */
+private fun DrawScope.drawRocker(tilt: Float, accent: Color, bezel: Color) {
+    val w = size.width
+    val h = size.height
+    val wall = h * 0.13f
+    val mid = w / 2f
+
+    // The housing: black, chamfered, lit from above so the top edge of the
+    // frame catches the light and the bottom edge falls away.
+    drawRoundRect(
+        brush = Brush.verticalGradient(
+            listOf(Color(0xFF4A4A50), Color(0xFF16161A), Color(0xFF0A0A0C)),
+        ),
+        cornerRadius = CornerRadius(h * 0.26f, h * 0.26f),
+    )
+    // The well the paddle drops into, darkest at the top where the frame
+    // overhangs it.
+    drawRoundRect(
+        brush = Brush.verticalGradient(
+            listOf(Color(0xFF000000), Color(0xFF17171B)),
+        ),
+        topLeft = Offset(wall * 0.55f, wall * 0.55f),
+        size = Size(w - wall * 1.1f, h - wall * 1.1f),
+        cornerRadius = CornerRadius(h * 0.2f, h * 0.2f),
+    )
+
+    val left = wall
+    val top = wall
+    val right = w - wall
+    val bottom = h - wall
+    val faceW = right - left
+    val radius = CornerRadius(h * 0.16f, h * 0.16f)
+
+    // The paddle, full height whichever way it is thrown. Each half carries
+    // its own colour so the control still says which option is live.
+    val down = (-tilt).coerceIn(-1f, 1f)
+    drawRoundRect(
+        brush = Brush.horizontalGradient(
+            0f to lerp(RockerPlastic, accent, down.coerceAtLeast(0f)),
+            0.49f to lerp(RockerPlastic, accent, down.coerceAtLeast(0f)),
+            0.51f to lerp(RockerPlastic, accent, (-down).coerceAtLeast(0f)),
+            1f to lerp(RockerPlastic, accent, (-down).coerceAtLeast(0f)),
+            startX = left,
+            endX = right,
+        ),
+        topLeft = Offset(left, top),
+        size = Size(faceW, bottom - top),
+        cornerRadius = radius,
+    )
+
+    // Light from above across the whole face.
+    drawRoundRect(
+        brush = Brush.verticalGradient(
+            listOf(
+                Color.White.copy(alpha = 0.14f),
+                Color.Transparent,
+                Color.Black.copy(alpha = 0.18f),
+            ),
+            startY = top,
+            endY = bottom,
+        ),
+        topLeft = Offset(left, top),
+        size = Size(faceW, bottom - top),
+        cornerRadius = radius,
+    )
+
+    // The end that is down lies in shadow, deepest at its outer edge.
+    val sunkAtLeft = tilt <= 0f
+    val deep = 0.42f * kotlin.math.abs(tilt)
+    drawRoundRect(
+        brush = Brush.horizontalGradient(
+            if (sunkAtLeft) {
+                listOf(Color.Black.copy(alpha = deep), Color.Transparent, Color.Transparent)
+            } else {
+                listOf(Color.Transparent, Color.Transparent, Color.Black.copy(alpha = deep))
+            },
+            startX = left,
+            endX = right,
+        ),
+        topLeft = Offset(left, top),
+        size = Size(faceW, bottom - top),
+        cornerRadius = radius,
+    )
+
+    // The lit edge of the end that is up, sliding across as the switch is
+    // thrown. This is the part the eye actually reads the position from.
+    val band = faceW * RockerBand
+    val centre = if (sunkAtLeft) right - band * 0.6f else left + band * 0.6f
+    drawRoundRect(
+        brush = Brush.horizontalGradient(
+            0f to Color.Transparent,
+            0.5f to Color.White.copy(alpha = 0.34f),
+            1f to Color.Transparent,
+            startX = centre - band,
+            endX = centre + band,
+        ),
+        topLeft = Offset(left, top),
+        size = Size(faceW, bottom - top),
+        cornerRadius = radius,
+    )
+}
+
 /**
  * A row of mutually exclusive choices, sized to its labels.
  *
  * Chips would say the same thing, but each group of them wants a row to
  * itself, and the connection panel has no spare height to give: whatever it
  * takes comes off the map.
+ *
+ * With [rocker] it is drawn as a switch instead of a pair of chips. The
+ * drawing goes on a canvas behind the labels, and the labels keep the padding
+ * they always had, so the control measures exactly what it measured before.
  */
 @Composable
 internal fun <T> SegmentedChoice(
@@ -1463,41 +1596,69 @@ internal fun <T> SegmentedChoice(
     onSelect: (T) -> Unit,
     accent: Color? = null,
     onAccent: Color? = null,
+    rocker: Boolean = false,
 ) {
     val scheme = MaterialTheme.colorScheme
     val fill = accent ?: scheme.primary
     val ink = onAccent ?: scheme.onPrimary
     val shape = RoundedCornerShape(8.dp)
-    Row(
+    val chosenIndex = options.indexOfFirst { it.first == selected }.coerceAtLeast(0)
+    // Sprung, and underdamped on purpose: a real rocker reaches its stop and
+    // bounces off it once. Without the overshoot it slides, which reads as a
+    // slider rather than a switch.
+    val tilt by animateFloatAsState(
+        targetValue = if (chosenIndex == 0) -1f else 1f,
+        animationSpec = spring(dampingRatio = 0.5f, stiffness = 1200f),
+        label = "rocker",
+    )
+    Box(
         modifier = Modifier
             .height(SegmentedHeight)
             .clip(shape)
-            .border(1.dp, scheme.outline, shape),
+            .then(if (rocker) Modifier else Modifier.border(1.dp, scheme.outline, shape)),
     ) {
-        options.forEachIndexed { index, (value, label) ->
-            if (index > 0) {
+        if (rocker) {
+            Canvas(modifier = Modifier.matchParentSize()) {
+                drawRocker(tilt, fill, scheme.outline)
+            }
+        }
+        Row(modifier = Modifier.fillMaxHeight()) {
+            options.forEachIndexed { index, (value, label) ->
+                if (index > 0) {
+                    // Kept even when the canvas draws the seam itself: it is a
+                    // whole device pixel of width, and dropping it pulled the
+                    // control in and shifted the panel beside it two pixels
+                    // left. The switch is meant to change how this looks, not
+                    // where anything sits.
+                    Box(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .width(1.dp)
+                            .background(if (rocker) Color.Transparent else scheme.outline),
+                    )
+                }
+                val chosen = value == selected
                 Box(
+                    contentAlignment = Alignment.Center,
                     modifier = Modifier
                         .fillMaxHeight()
-                        .width(1.dp)
-                        .background(scheme.outline),
-                )
-            }
-            val chosen = value == selected
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .background(if (chosen) fill else Color.Transparent)
-                    .clickable { onSelect(value) }
-                    .padding(horizontal = 10.dp),
-            ) {
-                Text(
-                    text = label,
-                    fontSize = 12.sp,
-                    fontWeight = if (chosen) FontWeight.Medium else FontWeight.Normal,
-                    color = if (chosen) ink else scheme.onSurfaceVariant,
-                )
+                        .then(
+                            if (rocker) {
+                                Modifier
+                            } else {
+                                Modifier.background(if (chosen) fill else Color.Transparent)
+                            },
+                        )
+                        .clickable { onSelect(value) }
+                        .padding(horizontal = 10.dp),
+                ) {
+                    Text(
+                        text = label,
+                        fontSize = 12.sp,
+                        fontWeight = if (chosen) FontWeight.Medium else FontWeight.Normal,
+                        color = if (chosen) ink else scheme.onSurfaceVariant,
+                    )
+                }
             }
         }
     }
@@ -1538,6 +1699,7 @@ private fun ConnectionPanel(
                     options = listOf(LinkType.UDP to "UDP", LinkType.TCP to "TCP"),
                     selected = form.type,
                     onSelect = onType,
+                    rocker = true,
                 )
                 // Which way round the UDP link goes. TCP has only one answer,
                 // so the question is not asked there.
