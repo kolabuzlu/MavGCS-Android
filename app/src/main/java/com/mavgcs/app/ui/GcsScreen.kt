@@ -1100,7 +1100,14 @@ private fun ArmPad(
         // than for the action it performs: green while armed, red while not, so
         // a glance says whether the props are live.
         HoldButton(
-            label = "ARM",
+            // Three things to say, and the button says whichever is true: the
+            // aircraft will not accept an arm command, it will, or it already
+            // has. NOT READY replaces the word ARM rather than qualifying it,
+            // because a button offering to do something the vehicle has
+            // already refused is the wrong thing to read at a glance. The
+            // press still goes out, and holding still force-arms, which is
+            // exactly the state where that is the useful gesture.
+            label = if (!armed && !readyToArm) "NOT READY" else "ARM",
             holdLabel = "FORCE\u2026",
             // Only while it means something: the check is defined as always
             // passing once armed, so the caption would be stating a formality.
