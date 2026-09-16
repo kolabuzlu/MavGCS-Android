@@ -203,6 +203,15 @@ class UvcDevice(
         return wrote >= 0
     }
 
+    // Where the reader is in the stream. Kept across calls on purpose: a frame
+    // ends in the middle of a read, and the bytes after it are the beginning of
+    // the next one. Dropping them cost a slice off the side of every frame.
+    private var streamStarted = false
+    private var streamFrameId = -1
+    private var payloadLeft = 0
+    private var carry = ByteArray(0)
+    private var carryLength = 0
+
     /**
      * Read one whole video frame, or -1 if none arrived in time.
      *
@@ -219,56 +228,112 @@ class UvcDevice(
      * end-of-frame flag, because this card never sets that flag: a raw capture
      * showed 193 reads carrying six megabytes with it set exactly zero times.
      *
-     * Payload boundaries survive a lost byte by scanning forward for the next
-     * header rather than assuming the stride held, since a frame ends on a
-     * short payload that knocks the rhythm out of step.
+     * A frame ends partway through a read, so whatever follows it in that read
+     * is held and used to start the next one. Returning without it left every
+     * frame short at the front by however much had already arrived, which
+     * showed as a band of the picture displaced to the left edge.
      */
-    fun readFrame(into: ByteArray, timeoutMs: Int): Int {
+    fun readFrame(into: ByteArray, want: Int, timeoutMs: Int): Int {
         val packet = ByteArray(endpoint.maxPacketSize * PACKETS_PER_READ)
         val deadline = System.currentTimeMillis() + timeoutMs
         var filled = 0
-        var started = false
-        var frameId = -1
-        var remaining = 0          // data left in the payload being read
+
+        // Anything held back from the previous frame goes first.
+        if (carryLength > 0) {
+            val held = carry.copyOf(carryLength)
+            carryLength = 0
+            val done = consume(held, held.size, into, filled, want)
+            if (done.complete) return done.filled
+            filled = done.filled
+        }
+
         while (System.currentTimeMillis() < deadline) {
             val read = connection.bulkTransfer(endpoint, packet, packet.size, READ_TIMEOUT_MS)
             if (read <= 0) continue
-            var at = 0
-            while (at < read) {
-                if (remaining > 0) {
-                    val take = minOf(remaining, read - at)
-                    if (started && filled + take <= into.size) {
-                        System.arraycopy(packet, at, into, filled, take)
-                        filled += take
-                    }
-                    at += take
-                    remaining -= take
-                    continue
-                }
-                // A payload header, or hunt for one.
-                if (at + 2 > read) break
-                val headerLength = packet[at].toInt() and 0xFF
-                val info = packet[at + 1].toInt() and 0xFF
-                if (headerLength !in 2..64 || (info and 0x80) == 0) {
-                    at += 1
-                    continue
-                }
-                val id = info and 0x01
-                if (!started) {
-                    // Begin at a boundary, so the frame handed back is whole
-                    // rather than starting halfway down the picture.
-                    frameId = id
-                    started = true
-                    filled = 0
-                } else if (id != frameId) {
-                    return filled
-                }
-                if ((info and 0x40) != 0) filled = 0       // the card flagged an error
-                at += headerLength
-                remaining = (PAYLOAD_BYTES - headerLength).coerceAtLeast(0)
-            }
+            val done = consume(packet, read, into, filled, want)
+            if (done.complete) return done.filled
+            filled = done.filled
         }
         return -1
+    }
+
+    private class Progress(val filled: Int, val complete: Boolean)
+
+    /**
+     * Walk one block of bytes, stripping payload headers and copying the rest.
+     *
+     * Stops the moment the frame-ID flips, keeping everything after that point
+     * for the next frame.
+     */
+    private fun consume(
+        block: ByteArray,
+        length: Int,
+        into: ByteArray,
+        from: Int,
+        want: Int,
+    ): Progress {
+        var filled = from
+        var at = 0
+        while (at < length) {
+            if (payloadLeft > 0) {
+                var take = minOf(payloadLeft, length - at)
+                if (streamStarted) {
+                    // Never past the end of a frame. The last payload of one is
+                    // short -- a 1080p frame is not a whole number of 1024-byte
+                    // payloads -- so trusting the stride runs into the next
+                    // frame's header and swallows it as picture. That cost half
+                    // a row of alignment on every frame.
+                    take = minOf(take, want - filled)
+                    if (take > 0 && filled + take <= into.size) {
+                        System.arraycopy(block, at, into, filled, take)
+                        filled += take
+                    }
+                    if (filled >= want) {
+                        // Whole. Hold what follows for the next one.
+                        val leftover = length - (at + take)
+                        if (leftover > 0) {
+                            if (carry.size < leftover) carry = ByteArray(leftover)
+                            System.arraycopy(block, at + take, carry, 0, leftover)
+                            carryLength = leftover
+                        }
+                        payloadLeft = 0
+                        streamStarted = false      // resync on the next header
+                        return Progress(filled, complete = true)
+                    }
+                }
+                val step = minOf(payloadLeft, length - at)
+                at += step
+                payloadLeft -= step
+                continue
+            }
+            if (at + 2 > length) break
+            val headerLength = block[at].toInt() and 0xFF
+            val info = block[at + 1].toInt() and 0xFF
+            if (headerLength !in 2..64 || (info and 0x80) == 0) {
+                // Out of step. Hunt forward rather than assume the stride held.
+                at += 1
+                continue
+            }
+            val id = info and 0x01
+            if (!streamStarted) {
+                streamStarted = true
+                streamFrameId = id
+                filled = 0
+            } else if (id != streamFrameId) {
+                streamFrameId = id
+                // Hold the rest of this block: it is the next frame's opening.
+                val leftover = length - at
+                if (carry.size < leftover) carry = ByteArray(leftover)
+                System.arraycopy(block, at, carry, 0, leftover)
+                carryLength = leftover
+                payloadLeft = 0
+                return Progress(filled, complete = true)
+            }
+            if ((info and 0x40) != 0) filled = 0
+            at += headerLength
+            payloadLeft = (PAYLOAD_BYTES - headerLength).coerceAtLeast(0)
+        }
+        return Progress(filled, complete = false)
     }
 
     /**

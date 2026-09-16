@@ -339,17 +339,24 @@ class LiveVideo {
             }
             val buffer = ByteArray(agreed.maxFrameBytes.coerceAtLeast(1 shl 20))
             val luma = agreed.width * agreed.height
+            // Exactly what one frame is, rather than what the card says its
+            // buffer might need: NV12 and its planar cousin are twelve bits a
+            // pixel, and the packed one is sixteen.
+            val frameBytes = when (agreed.fourcc.uppercase()) {
+                "YUY2", "YUYV" -> luma * 2
+                else -> luma + luma / 2
+            }
             var shown = 0
             var biggest = 0
             var began = System.currentTimeMillis()
             while (currentCoroutineContext().isActive) {
-                val got = opened.readFrame(buffer, FRAME_WAIT_MS)
+                val got = opened.readFrame(buffer, frameBytes, FRAME_WAIT_MS)
                 if (got > biggest) biggest = got
                 // The whole picture is not insisted on. A frame that arrives
                 // with its colour cut short still shows what the camera sees,
                 // and one picture is worth more here than a perfect one that
                 // never comes.
-                if (got < luma) {
+                if (got < frameBytes) {
                     // Nothing is assembling. Say what the stream looks like
                     // instead of waiting silently on it.
                     val shape = opened.describeStream(2_000)
@@ -433,7 +440,7 @@ class LiveVideo {
                     var bytes = 0L
                     var frames = 0
                     while (System.currentTimeMillis() - began < MEASURE_MS) {
-                        val got = opened.readFrame(buffer, 900)
+                        val got = opened.readFrame(buffer, agreed.maxFrameBytes, 900)
                         if (got > 0) {
                             bytes += got
                             if (got >= agreed.maxFrameBytes) frames++
