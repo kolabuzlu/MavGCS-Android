@@ -233,40 +233,41 @@ class LiveVideo {
                     f.fourcc, f.width, f.height, f.fps, f.bytesPerSecond / 1e6,
                 )
             }
-            val agreed = formats.firstOrNull()?.let { opened.negotiate(it) }
-            if (agreed == null) {
-                lines += "The card would not agree a format."
-            } else {
-                lines += "The card agreed to %dx%d at %.0f fps.".format(
-                    agreed.width, agreed.height, agreed.fps,
-                )
-                // Read for a moment and weigh it. What a card offers and what
-                // the cable it arrived through can carry are different numbers,
-                // and only the second one decides whether there is a picture.
+            // Every format the card offers, not just the first. They are all
+            // the same size here, but a card that refuses one and serves
+            // another is a thing that happens, and ruling it out is cheap.
+            var streamed = false
+            for (want in formats) {
+                val agreed = opened.negotiate(want)
+                if (agreed == null) {
+                    lines += "Format %d: the card would not agree it.".format(want.formatIndex)
+                    continue
+                }
                 val buffer = ByteArray(agreed.maxFrameBytes.coerceAtLeast(1 shl 20))
                 val began = System.currentTimeMillis()
                 var bytes = 0L
                 var frames = 0
                 while (System.currentTimeMillis() - began < MEASURE_MS) {
-                    val got = opened.readFrame(buffer, 1_000)
+                    val got = opened.readFrame(buffer, 800)
                     if (got > 0) {
                         bytes += got
                         if (got >= agreed.maxFrameBytes) frames++
                     }
                 }
                 val seconds = (System.currentTimeMillis() - began) / 1000.0
-                val rate = bytes / seconds / 1e6
-                lines += "Measured %.0f MB/s over this cable, %d whole frames in %.0fs."
-                    .format(rate, frames, seconds)
-                val needed = agreed.bytesPerSecond / 1e6
-                lines += if (rate < needed * 0.9) {
-                    "That is %.0f MB/s short of the %.0f MB/s this format needs. "
-                        .format(needed - rate, needed) +
-                        "The card is on the tablet's USB 2 bus; its USB 3 bus is empty, " +
-                        "so this is the cable rather than the port."
-                } else {
-                    "Enough for the format it agreed to."
-                }
+                lines += "Format %d (%s %dx%d): %.1f MB/s, %d whole frames.".format(
+                    agreed.formatIndex, agreed.fourcc, agreed.width, agreed.height,
+                    bytes / seconds / 1e6, frames,
+                )
+                if (bytes > 0) streamed = true
+            }
+            lines += if (streamed) {
+                "Something is arriving. The link is the only question left."
+            } else {
+                "Not one byte from any format. Bulk transfers are not bandwidth " +
+                    "reserved, so a merely slow cable would still deliver something. " +
+                    "Nothing at all points at the card refusing this USB 2 link, or " +
+                    "at no signal reaching its input."
             }
         } finally {
             opened.close()
