@@ -2240,8 +2240,13 @@ private val NavTargetColor = Color(0xFFFF2FD0)
  */
 private const val ReadyToArmTint = 0.22f
 
-/** How far the caption before a button's label is faded. Size is unchanged. */
-private const val LabelPrefixAlpha = 0.6f
+/**
+ * How far the caption before a button's label is faded. Size is unchanged.
+ *
+ * Far enough that the label keeps the emphasis, not so far that the caption
+ * stops being readable against the fill it sits on.
+ */
+private const val LabelPrefixAlpha = 0.45f
 
 private val ModePending = Color(0xFFD8B400)
 private val OnModePending = Color(0xFF2A2200)
