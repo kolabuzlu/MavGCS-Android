@@ -64,6 +64,12 @@ import androidx.media3.exoplayer.rtsp.RtspMediaSource
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.mavgcs.app.video.UvcDevice
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 /**
@@ -93,6 +99,15 @@ enum class VideoSource(val label: String) {
  */
 @Stable
 class LiveVideo {
+    /**
+     * For the capture card, which is read with blocking USB calls.
+     *
+     * Those take seconds -- a negotiation and then a measured read, for each
+     * format the card offers -- and on the main thread that is not slow, it is
+     * an unresponsive app: Android put up "Application Not Responding" the
+     * first time this ran on a tablet where the card stayed silent.
+     */
+    private val work = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     var source by mutableStateOf(VideoSource.RTSP)
     var address by mutableStateOf("rtsp://")
 
@@ -215,10 +230,19 @@ class LiveVideo {
      * possible. Saying which one is wrong is more use than failing silently.
      */
     private fun inspect(manager: UsbManager, device: UsbDevice) {
+        message = "Reading from the capture card. This takes a few seconds."
+        deviceReport = emptyList()
+        work.launch {
+            val lines = withContext(Dispatchers.IO) { gather(manager, device) }
+            deviceReport = lines
+            message = null
+        }
+    }
+
+    private fun gather(manager: UsbManager, device: UsbDevice): List<String> {
         val opened = UvcDevice.open(manager, device)
         if (opened == null) {
-            message = "Could not claim the capture device."
-            return
+            return listOf("Could not claim the capture device.")
         }
         val lines = mutableListOf<String>()
         try {
@@ -272,14 +296,14 @@ class LiveVideo {
         } finally {
             opened.close()
         }
-        deviceReport = lines
-        message = null
+        return lines
     }
 
     fun stop() {
         player?.release()
         player = null
         message = null
+        work.coroutineContext.cancelChildren()
     }
 
     /**
