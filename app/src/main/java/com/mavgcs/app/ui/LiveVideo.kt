@@ -10,6 +10,9 @@ import android.hardware.usb.UsbManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.OptIn
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -60,6 +63,9 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.datasource.UdpDataSource
+import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.exoplayer.rtsp.RtspMediaSource
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
@@ -68,6 +74,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
@@ -86,7 +95,7 @@ import kotlin.math.roundToInt
  */
 enum class VideoSource(val label: String) {
     DEVICE("Video In"),
-    RTSP("RTSP"),
+    STREAM("Stream"),
 }
 
 /**
@@ -108,8 +117,8 @@ class LiveVideo {
      * first time this ran on a tablet where the card stayed silent.
      */
     private val work = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    var source by mutableStateOf(VideoSource.RTSP)
-    var address by mutableStateOf("rtsp://")
+    var source by mutableStateOf(VideoSource.STREAM)
+    var address by mutableStateOf("udp://0.0.0.0:5000")
 
     /** Showing over the map rather than inside the dialog. */
     var floating by mutableStateOf(false)
@@ -121,6 +130,31 @@ class LiveVideo {
     var player by mutableStateOf<ExoPlayer?>(null)
         private set
 
+    /**
+     * The newest decoded picture, for the MJPEG path.
+     *
+     * Motion JPEG has no player behind it and needs none: every frame is a
+     * whole picture, so there is nothing to buffer, nothing to synchronise and
+     * no stream state to keep. That is also why it recovers instantly from a
+     * dropped packet, which matters more on a video being watched while flying
+     * than the bandwidth it costs.
+     */
+    var frame by mutableStateOf<android.graphics.Bitmap?>(null)
+        private set
+
+    private var mjpeg: Job? = null
+
+    /**
+     * Whether the Motion JPEG reader is running, as state rather than as a
+     * question asked of the job.
+     *
+     * A plain field would have been true at the right moments and still wrong:
+     * nothing recomposes when it changes, so the window went on offering Start
+     * over a picture that was already playing, and the control that sends it to
+     * the map never appeared at all.
+     */
+    private var streaming by mutableStateOf(false)
+
     /** What the capture card said about itself, line by line. */
     var deviceReport by mutableStateOf<List<String>>(emptyList())
         private set
@@ -129,7 +163,7 @@ class LiveVideo {
     var needsCameraPermission by mutableStateOf(false)
         private set
 
-    val running: Boolean get() = player != null
+    val running: Boolean get() = player != null || streaming
 
     @OptIn(UnstableApi::class)
     fun start(context: Context) {
@@ -139,19 +173,40 @@ class LiveVideo {
             return
         }
         val uri = address.trim()
-        if (!uri.startsWith("rtsp://", ignoreCase = true)) {
-            message = "An RTSP address starts with rtsp://"
+        val rtsp = uri.startsWith("rtsp://", ignoreCase = true)
+        val udp = uri.startsWith("udp://", ignoreCase = true)
+        val http = uri.startsWith("http://", ignoreCase = true) ||
+            uri.startsWith("https://", ignoreCase = true)
+        if (http) {
+            startMjpeg(uri)
             return
         }
-        message = "Connecting to $uri"
-        val media = RtspMediaSource.Factory()
-            // Over TCP rather than UDP. RTP over UDP needs the camera to reach
-            // back to an arbitrary port on the tablet, which a phone hotspot or
-            // any ordinary router will drop; interleaving it on the connection
-            // already open costs a little latency and always arrives.
-            .setForceUseRtpTcp(true)
-            .setTimeoutMs(RTSP_TIMEOUT_MS)
-            .createMediaSource(MediaItem.fromUri(uri))
+        if (!rtsp && !udp) {
+            message = "An address starts with http://, rtsp:// or udp://"
+            return
+        }
+        message = "Opening $uri"
+        val media = if (rtsp) {
+            RtspMediaSource.Factory()
+                // Over TCP rather than UDP. Interleaving the video on the
+                // connection already open costs a little latency; the
+                // alternative asks the camera to reach back to an arbitrary
+                // port on the tablet, which an ordinary router will drop.
+                .setForceUseRtpTcp(true)
+                .setTimeoutMs(RTSP_TIMEOUT_MS)
+                .createMediaSource(MediaItem.fromUri(uri))
+        } else {
+            // A plain transport stream arriving on a port. Nothing is
+            // negotiated and nothing is requested: the sender pushes and this
+            // end listens, which is why the address is a port on this tablet
+            // rather than somewhere to dial. Lower latency than RTSP, and a
+            // lost packet costs a blemish rather than a stall -- the right
+            // trade for a picture being watched while flying.
+            ProgressiveMediaSource.Factory(
+                { UdpDataSource(UDP_RECEIVE_BYTES, UDP_TIMEOUT_MS) },
+                DefaultExtractorsFactory(),
+            ).createMediaSource(MediaItem.fromUri(uri))
+        }
         val created = ExoPlayer.Builder(context).build().apply {
             addListener(object : Player.Listener {
                 override fun onPlayerError(error: PlaybackException) {
@@ -299,9 +354,96 @@ class LiveVideo {
         return lines
     }
 
+    /**
+     * Read Motion JPEG from an HTTP stream, frame by frame.
+     *
+     * The frames are found by their own markers rather than by reading the
+     * multipart headers around them: a JPEG begins FF D8 and ends FF D9, which
+     * is unambiguous, and it means the reader does not care how the sender
+     * spells its boundaries.
+     */
+    private fun startMjpeg(uri: String) {
+        message = "Opening $uri"
+        streaming = true
+        mjpeg = work.launch {
+            try {
+                val result = withContext(Dispatchers.IO) { readMjpeg(uri) }
+                if (result != null) message = result
+            } finally {
+                streaming = false
+                frame = null
+            }
+        }
+    }
+
+    private suspend fun readMjpeg(uri: String): String? {
+        var connection: java.net.HttpURLConnection? = null
+        try {
+            connection = (java.net.URL(uri).openConnection() as java.net.HttpURLConnection).apply {
+                connectTimeout = HTTP_TIMEOUT_MS
+                readTimeout = HTTP_TIMEOUT_MS
+                doInput = true
+            }
+            if (connection.responseCode !in 200..299) {
+                return "Could not play $uri — the server answered ${connection.responseCode}"
+            }
+            // 565 rather than full colour: half the memory and half the work
+            // per frame, and the difference is invisible on a video overlay.
+            val options = android.graphics.BitmapFactory.Options().apply {
+                inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
+            }
+            val input = java.io.BufferedInputStream(connection.inputStream, READ_CHUNK)
+            val buffer = java.io.ByteArrayOutputStream(READ_CHUNK)
+            val chunk = ByteArray(READ_CHUNK)
+            var seenStart = false
+            var previous = 0
+            while (currentCoroutineContext().isActive) {
+                val read = input.read(chunk)
+                if (read < 0) return "The video stream ended."
+                for (i in 0 until read) {
+                    val byte = chunk[i].toInt() and 0xFF
+                    if (!seenStart) {
+                        if (previous == 0xFF && byte == 0xD8) {
+                            seenStart = true
+                            buffer.reset()
+                            buffer.write(0xFF)
+                            buffer.write(0xD8)
+                        }
+                    } else {
+                        buffer.write(byte)
+                        if (previous == 0xFF && byte == 0xD9) {
+                            val bytes = buffer.toByteArray()
+                            val bitmap = android.graphics.BitmapFactory
+                                .decodeByteArray(bytes, 0, bytes.size, options)
+                            if (bitmap != null) {
+                                withContext(Dispatchers.Main) {
+                                    frame = bitmap
+                                    message = null
+                                }
+                            }
+                            seenStart = false
+                        }
+                    }
+                    previous = byte
+                }
+            }
+            return null
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            return "Could not play $uri — ${error.message ?: error.javaClass.simpleName}"
+        } finally {
+            runCatching { connection?.disconnect() }
+        }
+    }
+
     fun stop() {
         player?.release()
         player = null
+        mjpeg?.cancel()
+        mjpeg = null
+        streaming = false
+        frame = null
         message = null
         work.coroutineContext.cancelChildren()
     }
@@ -333,6 +475,41 @@ class LiveVideo {
 
         /** How long to read the capture card for, when weighing the cable. */
         const val MEASURE_MS = 3_000L
+
+        /** How long to wait on an HTTP video stream before giving up. */
+        const val HTTP_TIMEOUT_MS = 8_000
+
+        /** Read size for the Motion JPEG stream. */
+        const val READ_CHUNK = 64 * 1024
+
+        /** Room for a burst of transport stream packets between reads. */
+        const val UDP_RECEIVE_BYTES = 64 * 1024
+
+        /** How long a silent port waits before saying nothing is coming. */
+        const val UDP_TIMEOUT_MS = 8_000
+    }
+}
+
+/**
+ * Whichever picture is live, drawn the same way in the window and on the map.
+ *
+ * Two sources with nothing in common behind them -- a player holding a decoded
+ * stream, and a bare bitmap replaced twenty times a second -- and one place
+ * that decides which is showing, so neither caller has to know.
+ */
+@Composable
+fun VideoPicture(video: LiveVideo, modifier: Modifier = Modifier) {
+    val player = video.player
+    val picture = video.frame
+    when {
+        player != null -> VideoSurface(player, modifier)
+        picture != null -> Image(
+            bitmap = picture.asImageBitmap(),
+            contentDescription = "Live video",
+            contentScale = ContentScale.Fit,
+            modifier = modifier.background(Color.Black),
+        )
+        else -> Box(modifier.background(Color.Black))
     }
 }
 
@@ -379,10 +556,10 @@ fun VideoDialog(video: LiveVideo, onDismiss: () -> Unit) {
                     onSelect = { video.source = it },
                 )
                 when (video.source) {
-                    VideoSource.RTSP -> OutlinedTextField(
+                    VideoSource.STREAM -> OutlinedTextField(
                         value = video.address,
                         onValueChange = { video.address = it },
-                        label = { Text("Address", fontSize = 11.sp) },
+                        label = { Text("http:// or rtsp:// to dial out, udp:// to listen", fontSize = 11.sp) },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                         modifier = Modifier.fillMaxWidth(),
@@ -407,13 +584,12 @@ fun VideoDialog(video: LiveVideo, onDismiss: () -> Unit) {
                 // The picture stays in the dialog until it is sent to the map,
                 // so Start shows something immediately rather than asking for a
                 // second press to find out whether it worked.
-                video.player?.takeIf { !video.floating }?.let { running ->
-                    VideoSurface(
-                        player = running,
+                if (video.running && !video.floating) {
+                    VideoPicture(
+                        video = video,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .aspectRatio(16f / 9f)
-                            .background(Color.Black),
+                            .aspectRatio(16f / 9f),
                     )
                 }
             }
@@ -460,7 +636,7 @@ fun VideoDialog(video: LiveVideo, onDismiss: () -> Unit) {
  */
 @Composable
 fun FloatingVideo(video: LiveVideo, modifier: Modifier = Modifier) {
-    val running = video.player ?: return
+    if (!video.running) return
     val scheme = MaterialTheme.colorScheme
     var offsetX by androidx.compose.runtime.remember { mutableStateOf(0f) }
     var offsetY by androidx.compose.runtime.remember { mutableStateOf(0f) }
@@ -519,8 +695,8 @@ fun FloatingVideo(video: LiveVideo, modifier: Modifier = Modifier) {
                 )
             }
         }
-        VideoSurface(
-            player = running,
+        VideoPicture(
+            video = video,
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(16f / 9f),
