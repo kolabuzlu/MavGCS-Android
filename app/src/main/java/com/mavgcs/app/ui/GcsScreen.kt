@@ -1243,13 +1243,42 @@ private const val NO_DATA = "--"
 /** Messages and Connection share one height so their bottoms line up. */
 private val TopPanelHeight = 184.dp
 
-private data class TelemetryField(val label: String, val value: String)
+private data class TelemetryField(
+    val label: String,
+    val value: String,
+    val onTap: (() -> Unit)? = null,
+)
+
+/** Metres per second, read out in whichever unit was last asked for. */
+private fun Float?.asSpeed(kph: Boolean): String =
+    (if (kph) this?.times(MS_TO_KPH) else this).format(1)
 
 @Composable
 private fun TelemetryGrid(vehicle: VehicleState, metrics: LayoutMetrics) {
+    val context = LocalContext.current
+    // Remembered across runs, the way the battery cell count is. A pilot who
+    // thinks in kph thinks in kph tomorrow as well, and having to say so again
+    // on every launch is the kind of small friction that gets noticed daily.
+    var speedInKph by remember { mutableStateOf(loadSpeedInKph(context)) }
+    val swapSpeedUnit = {
+        speedInKph = !speedInKph
+        saveSpeedInKph(context, speedInKph)
+    }
+    val speedUnit = if (speedInKph) "kph" else "m/s"
     val fields = listOf(
-        TelemetryField("AirSpeed (m/s)", vehicle.airSpeedMs.format(1)),
-        TelemetryField("GroundSpeed (m/s)", vehicle.groundSpeedMs.format(1)),
+        // Either one turns both: they are the same quantity measured two ways,
+        // and reading one in kph beside the other in m/s invites exactly the
+        // comparison that would then be wrong.
+        TelemetryField(
+            "AirSpeed ($speedUnit)",
+            vehicle.airSpeedMs.asSpeed(speedInKph),
+            onTap = swapSpeedUnit,
+        ),
+        TelemetryField(
+            "GroundSpeed ($speedUnit)",
+            vehicle.groundSpeedMs.asSpeed(speedInKph),
+            onTap = swapSpeedUnit,
+        ),
         TelemetryField("Vertical Speed (m/s)", vehicle.climbMs.format(1)),
         TelemetryField("Altitude (m)", vehicle.altRelM.format(1)),
         TelemetryField("Rangefinder (m)", vehicle.rangefinderM.format(2)),
@@ -1261,7 +1290,7 @@ private fun TelemetryGrid(vehicle: VehicleState, metrics: LayoutMetrics) {
         TelemetryField("Yaw (deg)", vehicle.yawDeg.format(1)),
         TelemetryField("Gps HDOP", vehicle.hdop.format(2)),
         TelemetryField("Wind Direction (deg)", vehicle.windDirectionDeg.format(0)),
-        TelemetryField("Wind Velocity (kph)", vehicle.windSpeedMs?.times(3.6f).format(1)),
+        TelemetryField("Wind Velocity (kph)", vehicle.windSpeedMs?.times(MS_TO_KPH).format(1)),
         TelemetryField("QNH", vehicle.qnhHpa.format(1)),
         TelemetryField("Terrain Alt (m)", vehicle.terrainAltM.format(1)),
     )
@@ -1290,7 +1319,13 @@ private fun TelemetryCell(
     modifier: Modifier = Modifier,
 ) {
     Column(
-        modifier = modifier.padding(horizontal = 2.dp),
+        modifier = modifier
+            // The whole cell, caption included, so the tap does not have to
+            // find the figure itself.
+            .then(
+                if (field.onTap == null) Modifier else Modifier.clickable { field.onTap.invoke() },
+            )
+            .padding(horizontal = 2.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
@@ -1309,6 +1344,22 @@ private fun TelemetryCell(
             maxLines = 1,
         )
     }
+}
+
+private const val MS_TO_KPH = 3.6f
+
+private const val SPEED_UNIT_PREF_FILE = "mavgcs"
+private const val SPEED_UNIT_PREF_KEY = "speed_in_kph"
+
+private fun loadSpeedInKph(context: Context): Boolean =
+    context.getSharedPreferences(SPEED_UNIT_PREF_FILE, Context.MODE_PRIVATE)
+        .getBoolean(SPEED_UNIT_PREF_KEY, false)
+
+private fun saveSpeedInKph(context: Context, kph: Boolean) {
+    context.getSharedPreferences(SPEED_UNIT_PREF_FILE, Context.MODE_PRIVATE)
+        .edit()
+        .putBoolean(SPEED_UNIT_PREF_KEY, kph)
+        .apply()
 }
 
 /** How long a button must be held before its hold action fires. */
