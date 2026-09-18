@@ -256,6 +256,11 @@ internal fun MapSearchBox(
     val scheme = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current
+    // One style for the field and its placeholder both. Given only a font
+    // size, a Text keeps the theme's own line height -- twice the size here --
+    // so a placeholder written that way stands taller than the field it sits
+    // over, and the box shrank the moment anything was typed into it.
+    val typing = TextStyle(color = scheme.onSurface, fontSize = 12.sp)
     var query by remember { mutableStateOf("") }
     var searching by remember { mutableStateOf(false) }
     var results by remember { mutableStateOf<List<Place>>(emptyList()) }
@@ -296,7 +301,7 @@ internal fun MapSearchBox(
                 value = query,
                 onValueChange = { query = it },
                 singleLine = true,
-                textStyle = TextStyle(color = scheme.onSurface, fontSize = 12.sp),
+                textStyle = typing,
                 cursorBrush = SolidColor(scheme.primary),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = { run() }),
@@ -310,8 +315,7 @@ internal fun MapSearchBox(
                         if (query.isEmpty()) {
                             Text(
                                 text = "Search a place",
-                                fontSize = 12.sp,
-                                color = scheme.onSurfaceVariant,
+                                style = typing.copy(color = scheme.onSurfaceVariant),
                                 maxLines = 1,
                             )
                         }
