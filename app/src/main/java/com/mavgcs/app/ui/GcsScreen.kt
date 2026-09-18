@@ -85,6 +85,8 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.imageResource
@@ -234,6 +236,8 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
     // Armed by the hold, spent by the next tap. One place, one question, then
     // the map goes back to meaning what it usually means.
     var movingHome by remember { mutableStateOf(false) }
+    var lookAt by remember { mutableStateOf<GeoPoint?>(null) }
+    var lookAtToken by remember { mutableStateOf(0) }
     var showSettings by remember { mutableStateOf(false) }
     var showFind by remember { mutableStateOf(false) }
     var showVideo by remember { mutableStateOf(false) }
@@ -510,6 +514,8 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                         adsbContacts = adsbContacts,
                         homeHeldAt = homeHeldAt,
                         homeMoveArmed = movingHome,
+                        lookAt = lookAt,
+                        lookAtToken = lookAtToken,
                         onMapTap = { point ->
                             // While the move is armed the next tap means only
                             // this, and spends the arming whatever the answer
@@ -536,21 +542,39 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                     // about by what the row happens to contain. The row keeps
                     // clear of it by its measured width rather than a guessed
                     // one, which holds if the label or the font scale changes.
+                    // Where the Weather chip ends, so the search box under
+                    // the row can finish in the same pixel column. Measured
+                    // rather than guessed: the chips are sized by their own
+                    // labels and the font scale, so any number written here
+                    // would be wrong on the next device.
+                    val density = LocalDensity.current
+                    var weatherEndPx by remember { mutableStateOf(0) }
                     var hybridWidthPx by remember { mutableStateOf(0) }
                     val hybridReserve = with(LocalDensity.current) { hybridWidthPx.toDp() }
-                    FlowRow(
+                    Column(
                         modifier = Modifier
                             .align(Alignment.TopStart)
                             .fillMaxWidth()
                             .padding(8.dp)
                             .padding(end = hybridReserve + 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         MapToggle("Follow UAV", followUav) { followUav = !followUav }
                         MapToggle("Vectors", showGuides) { showGuides = !showGuides }
                         MapButton("Clear Trail") { clearTrailToken++ }
-                        MapToggle("Weather", showWeather) { showWeather = !showWeather }
+                        MapToggle(
+                            "Weather",
+                            showWeather,
+                            modifier = Modifier.onGloballyPositioned {
+                                weatherEndPx =
+                                    (it.positionInParent().x + it.size.width).roundToInt()
+                            },
+                        ) { showWeather = !showWeather }
                         MapToggle("ADS-B", showAdsb) { showAdsb = !showAdsb }
                         MissionControls(
                             queueing = queueWaypoints,
@@ -584,6 +608,30 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                                 viewModel.clearMission()
                             },
                         )
+                    }
+                    MapSearchBox(
+                        // Answers near the aircraft first, when there is one.
+                        near = vehicle.lat?.let { la -> vehicle.lon?.let { lo -> la to lo } },
+                        onPick = { place ->
+                            val point = GeoPoint(place.lat, place.lon)
+                            // Following would drag the map straight back to the
+                            // aircraft, so the place just asked for would be on
+                            // screen for a single frame.
+                            followUav = false
+                            lookAt = point
+                            lookAtToken++
+                            // The same pin a tap on the map leaves, so the
+                            // flight from here is the one that already exists:
+                            // FLY HERE, then the dialog that asks first.
+                            flyTarget = point
+                            awaitingFly = true
+                        },
+                        modifier = Modifier.width(
+                            weatherEndPx.takeIf { it > 0 }
+                                ?.let { with(density) { it.toDp() } }
+                                ?: SearchBoxWidth,
+                        ),
+                    )
                     }
                     MapSwitch(
                         label = "Hybrid",
@@ -1361,6 +1409,9 @@ private fun saveSpeedInKph(context: Context, kph: Boolean) {
         .putBoolean(SPEED_UNIT_PREF_KEY, kph)
         .apply()
 }
+
+/** Wide enough for a place name and its province, narrow enough to see past. */
+private val SearchBoxWidth = 340.dp
 
 /** How long a button must be held before its hold action fires. */
 private const val HOLD_MILLIS = 3000
@@ -2918,11 +2969,17 @@ private fun VehicleMap(
     onMapTap: (GeoPoint) -> Unit,
     homeHeldAt: GeoPoint?,
     homeMoveArmed: Boolean,
+    lookAt: GeoPoint?,
+    lookAtToken: Int,
 ) {
     val trail = remember { mutableListOf<GeoPoint>() }
     // Held outside snapshot state on purpose: comparing the token here must not
     // itself schedule another recomposition on every frame of telemetry.
     val lastCleared = remember { intArrayOf(clearTrailToken) }
+    // Counted rather than compared, so asking for the same place twice still
+    // moves the map -- which is what happens when a search is repeated after
+    // panning away from its answer.
+    val lastLookAt = remember { intArrayOf(lookAtToken) }
     val context = LocalContext.current
     val planeIcon = remember(context) { planeMarkerIcon(context) }
     val homeIcon = remember(context) { homeMarkerIcon(context) }
@@ -2986,6 +3043,10 @@ private fun VehicleMap(
             if (clearTrailToken != lastCleared[0]) {
                 trail.clear()
                 lastCleared[0] = clearTrailToken
+            }
+            if (lookAtToken != lastLookAt[0]) {
+                lastLookAt[0] = lookAtToken
+                lookAt?.let { map.controller.animateTo(it) }
             }
             // Rebuilt every update, so it has to happen whether or not there is a
             // fix, otherwise the target marker would never refresh without one.
