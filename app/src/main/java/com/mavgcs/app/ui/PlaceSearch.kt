@@ -30,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
@@ -282,7 +283,20 @@ internal fun MapSearchBox(
         }
     }
 
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(
+        // Opaque to touch, all of it. The box sits over the map, and only the
+        // text field and the two icons were anything a tap could land on: the
+        // magnifier, the padding round the field, the rounded ends and the
+        // gaps between the answers all let a finger through to the map behind,
+        // which took it for a fly-to and left a pin under the bar. Awaiting
+        // events without consuming them is enough -- it makes this a thing the
+        // hit test can find, so the map is never reached, while the field and
+        // the answers below still get their taps as before.
+        modifier = modifier.pointerInput(Unit) {
+            awaitPointerEventScope { while (true) awaitPointerEvent() }
+        },
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
