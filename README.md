@@ -8,6 +8,7 @@
  <a href="LICENSE"><img alt="License: GPL-3.0-or-later" src="https://img.shields.io/badge/License-GPLv3-blue.svg"></a>
  <a href="https://github.com/kolabuzlu/MavGCS-Android/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/kolabuzlu/MavGCS-Android?label=Release&color=59aa29"></a>
  <img alt="Platform" src="https://img.shields.io/badge/Platform-Android-red?style=flat">
+ <a href="https://github.com/kolabuzlu/MavGCS"><img alt="Desktop version for Windows and macOS" src="https://img.shields.io/badge/Desktop%20version-Windows%20%7C%20macOS-8957e5?style=flat"></a>
 </p>
 
 <p align="center">
@@ -25,6 +26,9 @@ You can monitor HUD and vital information about flight, use weather radar, exper
 You need to get free token from [ion.cesium.com](http://ion.cesium.com/) to activate 3D FPV view.
 
 This app is optimized for 12.7" Android tablets.
+
+There is a desktop version too, for Windows and macOS:
+[MavGCS](https://github.com/kolabuzlu/MavGCS).
 
 Created by **Derin Hakan Karakurt**
 
