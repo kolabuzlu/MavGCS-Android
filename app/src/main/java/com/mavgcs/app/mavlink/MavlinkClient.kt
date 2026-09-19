@@ -1357,6 +1357,7 @@ class MavlinkClient {
         waypoints: List<MissionWaypoint>,
         altitudeM: Float,
         restart: Boolean = true,
+        frame: AltitudeFrame = AltitudeFrame.RELATIVE,
     ) {
         val connection = connectionRef.get() ?: return
         val (sys, comp) = target.get() ?: return
@@ -1380,9 +1381,11 @@ class MavlinkClient {
                 }
                 // Each point flies at its own altitude where it has been
                 // given one; the rest take the mission's.
+                // The placeholder stays relative whatever the points do: it
+                // stands for home, and home is where relative is measured from.
                 missionPending = listOf(placeholder) +
                     waypoints.map {
-                        MissionPoint(it.lat, it.lon, it.altitudeM ?: altitudeM)
+                        MissionPoint(it.lat, it.lon, it.altitudeM ?: altitudeM, frame)
                     }
                 missionRestart = restart
                 missionState = MissionState.AWAITING_CLEAR_ACK
@@ -1607,7 +1610,14 @@ class MavlinkClient {
                         .targetSystem(sys)
                         .targetComponent(comp)
                         .seq(seq)
-                        .frame(MavFrame.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT)
+                        .frame(
+                            when (point.frame) {
+                                AltitudeFrame.TERRAIN ->
+                                    MavFrame.MAV_FRAME_GLOBAL_TERRAIN_ALT_INT
+                                AltitudeFrame.RELATIVE ->
+                                    MavFrame.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT
+                            },
+                        )
                         .command(MavCmd.MAV_CMD_NAV_WAYPOINT)
                         .current(0)
                         .autocontinue(1)
@@ -1623,7 +1633,12 @@ class MavlinkClient {
         }
     }
 
-    private data class MissionPoint(val lat: Double, val lon: Double, val altM: Float)
+    private data class MissionPoint(
+        val lat: Double,
+        val lon: Double,
+        val altM: Float,
+        val frame: AltitudeFrame = AltitudeFrame.RELATIVE,
+    )
 
     private enum class MissionState { AWAITING_CLEAR_ACK, UPLOADING, CLEARING }
 

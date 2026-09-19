@@ -163,6 +163,21 @@ enum class GuidedAction(val label: String, val unit: String) {
  * One point of a queued mission. A null altitude means the point has not
  * been given one of its own and takes the mission's.
  */
+/**
+ * What a waypoint's altitude is measured from.
+ *
+ * Absolute is deliberately absent. Height above the sea is the one of the
+ * three a pilot cannot read off the ground in front of them, and offering it
+ * beside the other two invites picking it by mistake.
+ */
+enum class AltitudeFrame {
+    /** Above the home the aircraft armed at, which is what the app shows. */
+    RELATIVE,
+
+    /** Above whatever ground is under the aircraft at the time. */
+    TERRAIN,
+}
+
 data class MissionWaypoint(
     val lat: Double,
     val lon: Double,

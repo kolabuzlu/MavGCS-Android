@@ -121,6 +121,7 @@ import com.mavgcs.app.mavlink.PlaneModeButton
 import com.mavgcs.app.adsb.AdsbContact
 import com.mavgcs.app.adsb.AdsbProvider
 import com.mavgcs.app.cache.MapTileCache
+import com.mavgcs.app.mavlink.AltitudeFrame
 import com.mavgcs.app.mavlink.MissionWaypoint
 import com.mavgcs.app.mavlink.TelemetrySettings
 import com.mavgcs.app.mavlink.UdpMode
@@ -857,7 +858,7 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
             currentAltitude = vehicle.altRelM,
             asMission = flyAsMission,
             onDismiss = { showFlyDialog = false },
-            onConfirm = { altitude ->
+            onConfirm = { altitude, frame ->
                 showFlyDialog = false
                 awaitingFly = false
                 if (flyAsMission) {
@@ -871,6 +872,7 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                         ),
                         altitudeM = altitude,
                         restart = true,
+                        frame = frame,
                     )
                 } else {
                     viewModel.flyTo(target.latitude, target.longitude, altitude)
@@ -1262,8 +1264,9 @@ private fun FlyHereDialog(
     currentAltitude: Float?,
     asMission: Boolean,
     onDismiss: () -> Unit,
-    onConfirm: (Float) -> Unit,
+    onConfirm: (Float, AltitudeFrame) -> Unit,
 ) {
+    var frame by remember { mutableStateOf(AltitudeFrame.RELATIVE) }
     var text by remember {
         mutableStateOf(currentAltitude?.takeIf { it > 1f }?.let { "%.0f".format(Locale.ROOT, it) } ?: "100")
     }
@@ -1283,10 +1286,32 @@ private fun FlyHereDialog(
                     onValueChange = { entered ->
                         text = entered.filter { it.isDigit() || it == '.' }.take(6)
                     },
-                    label = { Text("Altitude above home (m)") },
+                    // The caption says what the number means, because the
+                    // choice below changes it.
+                    label = {
+                        Text(
+                            if (asMission && frame == AltitudeFrame.TERRAIN) {
+                                "Altitude above the ground (m)"
+                            } else {
+                                "Altitude above home (m)"
+                            },
+                        )
+                    },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 )
+                if (asMission) {
+                    // Only for a mission: a guided reposition is flown above
+                    // home and has no frame to offer.
+                    SegmentedChoice(
+                        options = listOf(
+                            AltitudeFrame.RELATIVE to "Relative",
+                            AltitudeFrame.TERRAIN to "Terrain",
+                        ),
+                        selected = frame,
+                        onSelect = { frame = it },
+                    )
+                }
                 Text(
                     text = if (asMission) {
                         "Erases the mission on the aircraft, sends this one " +
@@ -1301,7 +1326,7 @@ private fun FlyHereDialog(
         },
         confirmButton = {
             TextButton(
-                onClick = { altitude?.let(onConfirm) },
+                onClick = { altitude?.let { onConfirm(it, frame) } },
                 enabled = altitude != null && altitude > 0f,
             ) {
                 Text("Fly")

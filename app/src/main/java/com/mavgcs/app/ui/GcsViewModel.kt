@@ -6,6 +6,7 @@ import com.mavgcs.app.mavlink.GuidedAction
 import com.mavgcs.app.mavlink.LinkConfig
 import com.mavgcs.app.mavlink.LinkType
 import com.mavgcs.app.mavlink.MavlinkClient
+import com.mavgcs.app.mavlink.AltitudeFrame
 import com.mavgcs.app.mavlink.MissionWaypoint
 import com.mavgcs.app.mavlink.StreamRates
 import com.mavgcs.app.mavlink.PlaneModeButton
@@ -38,7 +39,8 @@ class GcsViewModel : ViewModel() {
         waypoints: List<MissionWaypoint>,
         altitudeM: Float,
         restart: Boolean = true,
-    ) = client.uploadMission(waypoints, altitudeM, restart)
+        frame: AltitudeFrame = AltitudeFrame.RELATIVE,
+    ) = client.uploadMission(waypoints, altitudeM, restart, frame)
 
     fun clearMission() = client.clearMission()
 
