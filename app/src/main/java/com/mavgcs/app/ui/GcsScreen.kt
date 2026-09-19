@@ -702,7 +702,13 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                                 flyTarget = null
                                 awaitingFly = false
                             },
-                            modifier = Modifier.align(Alignment.BottomCenter),
+                            // In the middle of the map rather than along its
+                            // foot. The instruments stack up from the bottom
+                            // right and the AGL profile now reaches far enough
+                            // across that a bar down there was hidden behind
+                            // it -- and a confirmation nobody can see is not a
+                            // confirmation.
+                            modifier = Modifier.align(Alignment.Center),
                         )
                     }
                     // Compass over radar over the credit line, one gutter
@@ -1257,7 +1263,6 @@ private fun FlyHereBar(
     val scheme = MaterialTheme.colorScheme
     Row(
         modifier = modifier
-            .padding(bottom = 26.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(scheme.surface.copy(alpha = 0.92f))
             .padding(horizontal = 10.dp, vertical = 8.dp),
