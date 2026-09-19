@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <img alt="MavGCS on an Android tablet: flight mode and guided control buttons with an artificial horizon and telemetry down the left, messages and subsystem health across the top, and a moving map under a floating live video window carrying the view from the aircraft, with a compass rose and terrain radar at the right" src="mavgcs1r2.png" />
+  <img alt="MavGCS on an Android tablet: flight mode and guided control buttons with an artificial horizon and telemetry down the left, messages and subsystem health across the top, and a moving map under a floating live video window carrying the view from the aircraft, with a compass rose and terrain radar at the right" src="mavgcsandroidimage.png" />
 </p>
 
 A ground control station software for **MAVLink** protocol. 🛩️
