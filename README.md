@@ -9,7 +9,6 @@
  <a href="https://github.com/kolabuzlu/MavGCS-Android/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/kolabuzlu/MavGCS-Android?label=Release&color=59aa29"></a>
  <img alt="Platform" src="https://img.shields.io/badge/Platform-Android-red?style=flat">
 </p>
-
 <p align="center">
   <img alt="MavGCS on an Android tablet: flight mode and guided control buttons with an artificial horizon and telemetry down the left, messages and subsystem health across the top, and a moving map under a floating live video window carrying the view from the aircraft, with a compass rose and terrain radar at the right" src="mavgcsandroidimage.png" />
 </p>
