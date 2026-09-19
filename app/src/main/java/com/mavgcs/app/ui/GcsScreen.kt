@@ -727,7 +727,24 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                             onClick = { showVideo = true },
                         )
                         CompassRose(vehicle = vehicle, size = instrumentSize)
-                        TerrainRadar(vehicle = vehicle, size = instrumentSize)
+                        // Immediately left of the radar, sharing its bottom
+                        // edge, so the two read as one instrument: the radar
+                        // says where the ground is around the aircraft, the
+                        // profile says where it is along the track being made
+                        // good. Sized off the same dial, in the proportion the
+                        // desktop uses -- three hundred by a hundred and forty
+                        // against a two hundred square.
+                        Row(
+                            verticalAlignment = Alignment.Bottom,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            AglProfile(
+                                vehicle = vehicle,
+                                width = instrumentSize * 1.5f,
+                                height = instrumentSize * 0.7f,
+                            )
+                            TerrainRadar(vehicle = vehicle, size = instrumentSize)
+                        }
                         Text(
                             text = "Esri, Maxar, Earthstar Geographics",
                             fontSize = 9.sp,

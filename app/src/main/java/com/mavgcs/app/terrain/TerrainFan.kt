@@ -89,6 +89,45 @@ object TerrainSampler {
         return TerrainFan(elevations, rangeM, ANG_CELLS, RAD_CELLS)
     }
 
+    /** How much of the fan's range is looked back over, as a fraction. */
+    const val PROFILE_BEHIND_FRAC = 0.35
+
+    /** Points along the slice. Eighty reads smooth at panel width. */
+    const val PROFILE_SAMPLES = 80
+
+    /**
+     * The ground along the track, as a side-on slice: evenly spaced from
+     * [behindM] astern to [aheadM] ahead, NaN where no tile has arrived.
+     *
+     * Taken along the course being made good rather than where the nose
+     * points. Over a couple of kilometres a crosswind puts those far enough
+     * apart to matter, and it is the ground actually flown over that counts.
+     *
+     * Heights are above the sea. The aircraft's own altitude is deliberately
+     * not taken off here: the panel subtracts it, so a fresh altitude can
+     * redraw without resampling the ground.
+     */
+    fun trackProfile(
+        lat: Double,
+        lon: Double,
+        headingDeg: Double,
+        behindM: Double,
+        aheadM: Double,
+        samples: Int = PROFILE_SAMPLES,
+    ): FloatArray {
+        val span = behindM + aheadM
+        if (samples < 2 || span <= 0.0) return FloatArray(0)
+        return FloatArray(samples) { i ->
+            val distance = -behindM + span * i / (samples - 1)
+            val (pointLat, pointLon) = if (distance == 0.0) {
+                lat to lon
+            } else {
+                destination(lat, lon, headingDeg, distance)
+            }
+            TerrainProvider.elevation(pointLat, pointLon) ?: Float.NaN
+        }
+    }
+
     /** Great-circle destination from a start point, bearing and distance. */
     private fun destination(
         lat: Double,
