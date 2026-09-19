@@ -236,6 +236,10 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
     // Armed by the hold, spent by the next tap. One place, one question, then
     // the map goes back to meaning what it usually means.
     var movingHome by remember { mutableStateOf(false) }
+    // Which way the pin on the map is meant to be flown. A place found by
+    // searching goes as a mission in AUTO; a place tapped on the map keeps the
+    // guided reposition it has always had.
+    var flyAsMission by remember { mutableStateOf(false) }
     var lookAt by remember { mutableStateOf<GeoPoint?>(null) }
     var lookAtToken by remember { mutableStateOf(0) }
     var showSettings by remember { mutableStateOf(false) }
@@ -529,6 +533,7 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                             } else {
                                 flyTarget = point
                                 awaitingFly = true
+                                flyAsMission = false
                             }
                         },
                     )
@@ -625,6 +630,7 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                             // FLY HERE, then the dialog that asks first.
                             flyTarget = point
                             awaitingFly = true
+                            flyAsMission = true
                         },
                         modifier = Modifier.width(
                             weatherEndPx.takeIf { it > 0 }
@@ -849,11 +855,26 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
         FlyHereDialog(
             target = target,
             currentAltitude = vehicle.altRelM,
+            asMission = flyAsMission,
             onDismiss = { showFlyDialog = false },
             onConfirm = { altitude ->
                 showFlyDialog = false
                 awaitingFly = false
-                viewModel.flyTo(target.latitude, target.longitude, altitude)
+                if (flyAsMission) {
+                    // One point, uploaded as the whole mission. The upload
+                    // clears what the aircraft is holding before it sends
+                    // anything, so whatever was loaded before is gone rather
+                    // than flown after this.
+                    viewModel.uploadMission(
+                        waypoints = listOf(
+                            MissionWaypoint(target.latitude, target.longitude, altitude),
+                        ),
+                        altitudeM = altitude,
+                        restart = true,
+                    )
+                } else {
+                    viewModel.flyTo(target.latitude, target.longitude, altitude)
+                }
             },
         )
     }
@@ -1239,6 +1260,7 @@ private fun FlyHereBar(
 private fun FlyHereDialog(
     target: GeoPoint,
     currentAltitude: Float?,
+    asMission: Boolean,
     onDismiss: () -> Unit,
     onConfirm: (Float) -> Unit,
 ) {
@@ -1248,7 +1270,7 @@ private fun FlyHereDialog(
     val altitude = text.toFloatOrNull()
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Fly to here") },
+        title = { Text(if (asMission) "Fly there as a mission" else "Fly to here") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
@@ -1266,7 +1288,12 @@ private fun FlyHereDialog(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 )
                 Text(
-                    text = "Switches the vehicle to GUIDED and flies to this point.",
+                    text = if (asMission) {
+                        "Erases the mission on the aircraft, sends this one " +
+                            "point in its place, and switches to AUTO."
+                    } else {
+                        "Switches the vehicle to GUIDED and flies to this point."
+                    },
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
