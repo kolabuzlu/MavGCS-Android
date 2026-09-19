@@ -122,6 +122,7 @@ import com.mavgcs.app.adsb.AdsbContact
 import com.mavgcs.app.adsb.AdsbProvider
 import com.mavgcs.app.cache.MapTileCache
 import com.mavgcs.app.mavlink.AltitudeFrame
+import com.mavgcs.app.mavlink.OnArrival
 import com.mavgcs.app.mavlink.MissionWaypoint
 import com.mavgcs.app.mavlink.TelemetrySettings
 import com.mavgcs.app.mavlink.UdpMode
@@ -241,6 +242,13 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
     // searching goes as a mission in AUTO; a place tapped on the map keeps the
     // guided reposition it has always had.
     var flyAsMission by remember { mutableStateOf(false) }
+    // Kept between one flight and the next rather than reset each time the
+    // dialog opens. A pilot who wants height above the ground, or wants the
+    // aircraft to stay where it is sent, usually wants that again a minute
+    // later -- and both choices are in plain sight above the button, so a
+    // remembered one cannot be acted on without being read first.
+    var flyFrame by remember { mutableStateOf(AltitudeFrame.RELATIVE) }
+    var flyArrival by remember { mutableStateOf(OnArrival.RETURN) }
     var lookAt by remember { mutableStateOf<GeoPoint?>(null) }
     var lookAtToken by remember { mutableStateOf(0) }
     var showSettings by remember { mutableStateOf(false) }
@@ -857,8 +865,12 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
             target = target,
             currentAltitude = vehicle.altRelM,
             asMission = flyAsMission,
+            frame = flyFrame,
+            onFrame = { flyFrame = it },
+            arrival = flyArrival,
+            onArrival = { flyArrival = it },
             onDismiss = { showFlyDialog = false },
-            onConfirm = { altitude, frame ->
+            onConfirm = { altitude ->
                 showFlyDialog = false
                 awaitingFly = false
                 if (flyAsMission) {
@@ -872,7 +884,8 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                         ),
                         altitudeM = altitude,
                         restart = true,
-                        frame = frame,
+                        frame = flyFrame,
+                        arrival = flyArrival,
                     )
                 } else {
                     viewModel.flyTo(target.latitude, target.longitude, altitude)
@@ -1264,9 +1277,12 @@ private fun FlyHereDialog(
     currentAltitude: Float?,
     asMission: Boolean,
     onDismiss: () -> Unit,
-    onConfirm: (Float, AltitudeFrame) -> Unit,
+    frame: AltitudeFrame,
+    onFrame: (AltitudeFrame) -> Unit,
+    arrival: OnArrival,
+    onArrival: (OnArrival) -> Unit,
+    onConfirm: (Float) -> Unit,
 ) {
-    var frame by remember { mutableStateOf(AltitudeFrame.RELATIVE) }
     var text by remember {
         mutableStateOf(currentAltitude?.takeIf { it > 1f }?.let { "%.0f".format(Locale.ROOT, it) } ?: "100")
     }
@@ -1302,14 +1318,33 @@ private fun FlyHereDialog(
                 )
                 if (asMission) {
                     // Only for a mission: a guided reposition is flown above
-                    // home and has no frame to offer.
+                    // home, and has neither a frame nor an arrival to choose.
                     SegmentedChoice(
                         options = listOf(
                             AltitudeFrame.RELATIVE to "Relative",
                             AltitudeFrame.TERRAIN to "Terrain",
                         ),
                         selected = frame,
-                        onSelect = { frame = it },
+                        onSelect = onFrame,
+                    )
+                    SegmentedChoice(
+                        options = listOf(
+                            OnArrival.RETURN to "RTL",
+                            OnArrival.LOITER to "Loiter",
+                        ),
+                        selected = arrival,
+                        onSelect = onArrival,
+                    )
+                    Text(
+                        text = when (arrival) {
+                            OnArrival.LOITER ->
+                                "Circles the point and stays there."
+                            OnArrival.RETURN ->
+                                "Flies to the point; the mission then ends and " +
+                                    "the aircraft returns home."
+                        },
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 Text(
@@ -1326,7 +1361,7 @@ private fun FlyHereDialog(
         },
         confirmButton = {
             TextButton(
-                onClick = { altitude?.let { onConfirm(it, frame) } },
+                onClick = { altitude?.let(onConfirm) },
                 enabled = altitude != null && altitude > 0f,
             ) {
                 Text("Fly")

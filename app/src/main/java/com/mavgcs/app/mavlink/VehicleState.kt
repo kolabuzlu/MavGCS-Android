@@ -178,6 +178,21 @@ enum class AltitudeFrame {
     TERRAIN,
 }
 
+/**
+ * What the aircraft is to do once it reaches a point.
+ *
+ * The difference is the mission command itself, not a setting alongside it:
+ * a plain waypoint is a place to pass through, and a mission of one that runs
+ * out sends an ArduPilot aircraft home. LOITER_UNLIM is a place to stay.
+ */
+enum class OnArrival {
+    /** NAV_WAYPOINT. The mission ends there, so the aircraft returns home. */
+    RETURN,
+
+    /** NAV_LOITER_UNLIM. Circle the point until told to do something else. */
+    LOITER,
+}
+
 data class MissionWaypoint(
     val lat: Double,
     val lon: Double,

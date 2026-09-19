@@ -1358,6 +1358,7 @@ class MavlinkClient {
         altitudeM: Float,
         restart: Boolean = true,
         frame: AltitudeFrame = AltitudeFrame.RELATIVE,
+        arrival: OnArrival = OnArrival.RETURN,
     ) {
         val connection = connectionRef.get() ?: return
         val (sys, comp) = target.get() ?: return
@@ -1381,11 +1382,18 @@ class MavlinkClient {
                 }
                 // Each point flies at its own altitude where it has been
                 // given one; the rest take the mission's.
-                // The placeholder stays relative whatever the points do: it
-                // stands for home, and home is where relative is measured from.
+                // The placeholder stays a plain relative waypoint whatever
+                // the points do: it stands for home, which is where relative is
+                // measured from and not somewhere to circle.
                 missionPending = listOf(placeholder) +
                     waypoints.map {
-                        MissionPoint(it.lat, it.lon, it.altitudeM ?: altitudeM, frame)
+                        MissionPoint(
+                            it.lat,
+                            it.lon,
+                            it.altitudeM ?: altitudeM,
+                            frame,
+                            arrival,
+                        )
                     }
                 missionRestart = restart
                 missionState = MissionState.AWAITING_CLEAR_ACK
@@ -1618,7 +1626,12 @@ class MavlinkClient {
                                     MavFrame.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT
                             },
                         )
-                        .command(MavCmd.MAV_CMD_NAV_WAYPOINT)
+                        .command(
+                            when (point.arrival) {
+                                OnArrival.LOITER -> MavCmd.MAV_CMD_NAV_LOITER_UNLIM
+                                OnArrival.RETURN -> MavCmd.MAV_CMD_NAV_WAYPOINT
+                            },
+                        )
                         .current(0)
                         .autocontinue(1)
                         .x((point.lat * 1e7).toInt())
@@ -1638,6 +1651,7 @@ class MavlinkClient {
         val lon: Double,
         val altM: Float,
         val frame: AltitudeFrame = AltitudeFrame.RELATIVE,
+        val arrival: OnArrival = OnArrival.RETURN,
     )
 
     private enum class MissionState { AWAITING_CLEAR_ACK, UPLOADING, CLEARING }
