@@ -690,7 +690,14 @@ fun GcsScreen(viewModel: GcsViewModel = viewModel()) {
                     if (movingHome) {
                         MoveHomeBar(
                             onCancel = { movingHome = false },
-                            modifier = Modifier.align(Alignment.BottomCenter),
+                            // Off the foot of the map for the reason the
+                            // fly-here bar is, and a bar's height above it, so
+                            // that on the one occasion both are up -- a pin
+                            // dropped, then the credit line held -- they stack
+                            // rather than land on each other.
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .offset(y = -MapBarStack),
                         )
                     }
                     flyTarget?.takeIf { awaitingFly }?.let { target ->
@@ -1140,7 +1147,6 @@ private fun MoveHomeBar(onCancel: () -> Unit, modifier: Modifier = Modifier) {
     val scheme = MaterialTheme.colorScheme
     Row(
         modifier = modifier
-            .padding(bottom = 26.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(scheme.surface.copy(alpha = 0.92f))
             .padding(horizontal = 10.dp, vertical = 8.dp),
@@ -1518,6 +1524,9 @@ private fun saveSpeedInKph(context: Context, kph: Boolean) {
         .putBoolean(SPEED_UNIT_PREF_KEY, kph)
         .apply()
 }
+
+/** One map bar's height and a gutter, so two of them can sit clear. */
+private val MapBarStack = 62.dp
 
 /** Wide enough for a place name and its province, narrow enough to see past. */
 private val SearchBoxWidth = 340.dp
