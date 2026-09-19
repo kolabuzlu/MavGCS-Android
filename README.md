@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img alt="MavGCS running on a radio handset, two laptops, a monitor and a tablet, arranged on a table in a field under an open sky, beneath the words FPV Ground Control Station" src="mavgcstabletoplogo.png" />
+  <img alt="MavGCS running on a radio handset, two laptops, a monitor and a tablet, arranged on a table in a field under an open sky, beneath the words FPV Ground Control Station" src="mavgcstabletoplogosmall.png" />
 </p>
 
 A ground control station software for **MAVLink** protocol. 🛩️
