@@ -7,8 +7,8 @@
 <p align="center">
  <a href="LICENSE"><img alt="License: GPL-3.0-or-later" src="https://img.shields.io/badge/License-GPLv3-blue.svg"></a>
  <a href="https://github.com/kolabuzlu/MavGCS-Android/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/kolabuzlu/MavGCS-Android?label=Release&color=59aa29"></a>
- <img alt="Platform" src="https://img.shields.io/badge/Platform-Android-red?style=flat">
- <a href="https://github.com/kolabuzlu/MavGCS"><img alt="Desktop version for Windows and macOS" src="https://img.shields.io/badge/Desktop%20version-Windows%20%7C%20macOS-8957e5?style=flat"></a>
+ <img alt="Platform" src="https://img.shields.io/badge/Platform-Android-8957e5?style=flat">
+ <a href="https://github.com/kolabuzlu/MavGCS"><img alt="Desktop version for Windows and macOS" src="https://img.shields.io/badge/Desktop%20version-Windows%20%7C%20macOS-red?style=flat"></a>
 </p>
 
 <p align="center">
