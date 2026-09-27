@@ -21,8 +21,15 @@ object FlightModes {
         16L to "POSHOLD",
         17L to "BRAKE",
         18L to "THROW",
+        19L to "AVOID_ADSB",
+        20L to "GUIDED_NOGPS",
         21L to "SMART_RTL",
-        25L to "AUTO_RTL",
+        22L to "FLOWHOLD",
+        23L to "FOLLOW",
+        24L to "ZIGZAG",
+        25L to "SYSTEMID",
+        26L to "AUTOROTATE",
+        27L to "AUTO_RTL",
     )
 
     private val plane = mapOf(
