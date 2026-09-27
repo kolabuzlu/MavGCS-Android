@@ -5,6 +5,7 @@
  <a href="https://github.com/kolabuzlu/MavGCS-Android/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/kolabuzlu/MavGCS-Android?label=Release&color=59aa29"></a>
  <img alt="Platform" src="https://img.shields.io/badge/Platform-Android-8957e5?style=flat">
  <a href="https://github.com/kolabuzlu/MavGCS"><img alt="Desktop version for Windows and macOS" src="https://img.shields.io/badge/Desktop%20version-Windows%20%7C%20macOS-red?style=flat"></a>
+ <a href="https://github.com/kolabuzlu/MavGCS-iOS"><img alt="iOS version" src="https://img.shields.io/badge/iOS%20version-iOS-lightgrey?style=flat"></a>
 </p>
 
 <p align="center">
@@ -24,7 +25,8 @@ You need to get free token from [ion.cesium.com](http://ion.cesium.com/) to acti
 This app is optimized for 12.7" Android tablets.
 
 There is a desktop version too, for Windows and macOS:
-[MavGCS](https://github.com/kolabuzlu/MavGCS).
+[MavGCS](https://github.com/kolabuzlu/MavGCS), and an iPhone version:
+[MavGCS iOS](https://github.com/kolabuzlu/MavGCS-iOS).
 
 Created by **Derin Hakan Karakurt**
 
