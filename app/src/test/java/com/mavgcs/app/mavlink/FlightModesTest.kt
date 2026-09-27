@@ -78,6 +78,36 @@ class FlightModesTest {
         }
     }
 
+    @Test
+    fun roverModesAreNamedCorrectly() {
+        val expected = mapOf(
+            0L to "MANUAL", 1L to "ACRO", 2L to "LEARNING", 3L to "STEERING",
+            4L to "HOLD", 5L to "LOITER", 6L to "FOLLOW", 7L to "SIMPLE",
+            8L to "DOCK", 9L to "CIRCLE", 10L to "AUTO", 11L to "RTL",
+            12L to "SMART_RTL", 15L to "GUIDED", 16L to "INITIALISING",
+        )
+        expected.forEach { (number, name) ->
+            assertEquals(
+                "ArduRover mode $number",
+                name,
+                FlightModes.ardupilotMode("GROUND_ROVER", number),
+            )
+        }
+    }
+
+    /**
+     * A rover must not be read off the copter table. They disagree on most
+     * numbers -- 5 is LOITER to both, but 10 is AUTO to a rover and nothing at
+     * all to a copter, and 11 is RTL against DRIFT.
+     */
+    @Test
+    fun theVehicleTypePicksTheRightTable() {
+        assertEquals("RTL", FlightModes.ardupilotMode("GROUND_ROVER", 11L))
+        assertEquals("DRIFT", FlightModes.ardupilotMode("QUADROTOR", 11L))
+        assertEquals("RTL", FlightModes.ardupilotMode("FIXED_WING", 11L))
+        assertEquals("SMART_RTL", FlightModes.ardupilotMode("SURFACE_BOAT", 12L))
+    }
+
     /** An unknown number is shown as itself rather than guessed at. */
     @Test
     fun unknownModesFallBackToTheirNumber() {

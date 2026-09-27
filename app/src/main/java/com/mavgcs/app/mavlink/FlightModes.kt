@@ -82,15 +82,27 @@ object FlightModes {
 
     val planeGuidedMode = PlaneModeButton("GUIDED", 15L)
 
+    // Every number ArduRover can report, rather than the handful it used to
+    // carry: the missing ones came out as "MODE 7" and so on. Nothing here is
+    // held back the way copter 8 and 10 are -- those two are gone from the
+    // firmware for certain, and about LEARNING there is no such certainty, so
+    // it is better to name it than to show a bare number if one ever appears.
     private val rover = mapOf(
         0L to "MANUAL",
+        1L to "ACRO",
+        2L to "LEARNING",
         3L to "STEERING",
         4L to "HOLD",
         5L to "LOITER",
+        6L to "FOLLOW",
+        7L to "SIMPLE",
+        8L to "DOCK",
+        9L to "CIRCLE",
         10L to "AUTO",
         11L to "RTL",
         12L to "SMART_RTL",
         15L to "GUIDED",
+        16L to "INITIALISING",
     )
 
     fun ardupilotMode(vehicleType: String, customMode: Long): String {
