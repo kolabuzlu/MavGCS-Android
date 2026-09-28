@@ -34,3 +34,10 @@ Created by **Derin Hakan Karakurt**
 
 Download `MavGCS-<version>.apk` from the
 [Releases page](https://github.com/kolabuzlu/MavGCS-Android/releases), install it, run the app.
+
+### Acknowledgements
+
+Parts of MavGCS (terrain radar, ADS-B overlay, compass rose, video settings,
+and smaller details such as the sensor row and cache size presets) are
+derived from [Kite Ground Control](https://github.com/b14ckyy/Kite-GC) by
+Marc Hoffmann, licensed GPL-3.0-or-later.

@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Derin Hakan Karakurt
+//
+// Portions derived from Kite Ground Control, Copyright (C) 2026 Marc Hoffmann
+// (b14ckyy), https://github.com/b14ckyy/Kite-GC - the cache size presets,
+// ported to Kotlin and modified, 2026-09.
+
 package com.mavgcs.app.cache
 
 import android.content.Context
